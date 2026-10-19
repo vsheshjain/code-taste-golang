@@ -8,6 +8,8 @@ What the module layout looks like once you apply the core five concepts — usin
 
 ```
 your-app/
+├── AGENTS.md                       # entry map for agents and humans (CLAUDE.md symlinks here)
+├── Makefile                        # setup / test / lint / check — `make check` is the definition of done
 ├── go.mod                          # module github.com/you/your-app
 ├── go.sum
 ├── cmd/
@@ -41,10 +43,12 @@ your-app/
 │   └── config/                     # env → typed Config struct (optional; main can do it)
 │
 ├── arch_test.go                    # the dependency-rule check
+├── docs/adr/                        # one short file per architectural decision
 ├── Dockerfile
-├── Makefile                        # optional: lint/test/build shortcuts
 └── README.md
 ```
+
+The root files (`AGENTS.md`, `Makefile`, `docs/adr/`) are covered in [Repository Harness](./repository-harness.md).
 
 Compare with the Python layout: there's no `src/`, no `ports/` folder, no `adapters/` umbrella, no `bootstrap.py`, and no `tests/` tree. Each of those has a Go reason, covered below.
 

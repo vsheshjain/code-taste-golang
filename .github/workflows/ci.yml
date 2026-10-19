@@ -11,6 +11,4 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: example/go.mod
-      - run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
-      - run: go test -race ./...
+      - run: make check

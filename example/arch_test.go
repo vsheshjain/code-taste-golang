@@ -24,7 +24,10 @@ func TestDependencyRule(t *testing.T) {
 		for _, b := range banned {
 			for _, d := range deps {
 				if d == mod+b {
-					t.Errorf("internal/%s imports internal/%s", pkg, b)
+					t.Errorf("internal/%s imports internal/%s\n"+
+						"  WHY: dependencies must point inward (list ← app ← adapters ← httpapi ← cmd)\n"+
+						"  FIX: move the shared type inward (internal/app or internal/list), or wire it in cmd/api",
+						pkg, b)
 				}
 			}
 		}

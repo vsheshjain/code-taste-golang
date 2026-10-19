@@ -28,8 +28,11 @@ It also ships as a [Claude Code Skill](https://code.claude.com/docs/en/skills) s
 │               ├── testing.md
 │               ├── performance.md
 │               ├── logging.md
-│               └── instrumentation.md
+│               ├── instrumentation.md
+│               └── repository-harness.md # agent-ready repo practices
 └── example/                              # runnable, stdlib-only reference module
+    ├── AGENTS.md                         # entry map (CLAUDE.md symlinks here)
+    ├── Makefile                          # make check = definition of done
     ├── go.mod
     ├── cmd/api/main.go                   # composition root
     ├── internal/
@@ -46,7 +49,10 @@ A typical Go service built with these patterns. The full rationale lives in [pro
 
 ```
 your-app/
-├── go.mod                        # module github.com/you/your-app
+├── AGENTS.md                     # entry map: overview, commands, hard rules, doc links (CLAUDE.md symlinks here)
+├── Makefile                      # setup / test / lint / check — `make check` is the definition of done, CI runs it
+├── go.mod                        # module github.com/you/your-app; pins lint tools via `tool` directives
+├── docs/adr/                     # one short file per decision, including rejected alternatives
 ├── cmd/
 │   └── api/
 │       └── main.go               # composition root: read config, build adapters, wire services, serve
@@ -78,6 +84,7 @@ list (domain)  ←  app  ←  postgres / memory / openai  ←  httpapi  ←  cmd
 - **Constructors return concrete types.** `postgres.New(db)` returns `*postgres.DB`; `main` passes it where an `app.UnitOfWork` is expected.
 - **Packages are named for what they provide.** Use `list.ErrFull` and `postgres.New`. Avoid `models`, `utils`, `common`, `pkg/` and stutter like `list.ListService`.
 - **`context.Context` comes first** on every method that does I/O. Errors are wrapped with `%w` and matched with `errors.Is`.
+- **The repo is the system of record.** A new session (agent or human) must learn what it is, how it's organized, how to run and verify it, and what's next from files alone. Package doc comments carry per-package architecture notes; every rule that matters fails a build with a FIX hint. See [repository-harness.md](skills/code-taste-golang/docs/architecture/repository-harness.md).
 - **Tests sit beside the code.** Package choice gives you the test pyramid: domain unit tests, then service tests, then adapter integration tests, then `httptest` end-to-end.
 
 [`example/`](example/) is a working, stdlib-only version of this layout.
@@ -88,8 +95,8 @@ Requires Go 1.24+.
 
 ```bash
 cd example
-go test -race ./...
-go run ./cmd/api
+make check      # what CI runs
+make run
 # in another shell
 curl -s -XPOST localhost:8080/lists -d '{"owner":"u1","name":"My Stuff"}'
 ```

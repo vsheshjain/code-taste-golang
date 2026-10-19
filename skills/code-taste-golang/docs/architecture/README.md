@@ -81,6 +81,7 @@ The violations a compiler can't see (one adapter importing another, an adapter i
 - [Performance & Benchmarking](./performance.md) — pprof, execution traces, benchmarks + benchstat, load tests, the prod failure modes
 - [Code-Level Instrumentation](./instrumentation.md) — OpenTelemetry spans, metrics, health checks, latency budgets
 - [Logging & Observability](./logging.md) — `log/slog`, request IDs through `context`, what to log and never log
+- [Repository Harness](./repository-harness.md) — making the repo the system of record for agents and new teammates: `AGENTS.md`, `make check` as the definition of done, executable rules with fix hints, clean-state exits
 
 ### Why this order
 

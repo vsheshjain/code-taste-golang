@@ -26,6 +26,7 @@ The full doc set is at `./docs/architecture/`:
 | `performance.md` | pprof, trace, benchmarks + benchstat, load testing, prod failure modes |
 | `logging.md` | `log/slog`, request IDs via context, what to log where |
 | `instrumentation.md` | OpenTelemetry spans, metrics, health checks |
+| `repository-harness.md` | Making a repo agent-ready: `AGENTS.md`, `make check` as definition of done, executable rules, progress/feature files, clean-state checklist |
 
 **Don't load all of them. Load the 1–3 that match the task.** For a service review: Domain + Service + UoW. For new project setup: Project Structure + Testing. For "what am I missing?": README (vocab/dep rule) + the doc closest to the gap.
 
@@ -44,7 +45,8 @@ The full doc set is at `./docs/architecture/`:
 - Don't over-layer if the feature is small — match rigor to scope
 
 **"What am I missing?":**
-- Compare against the Go tooling baseline: `gofmt`/`goimports`, `go vet`, `staticcheck` or `golangci-lint`, `go test -race` with coverage, `govulncheck`, CI running all of them
+- Compare against the Go tooling baseline: `gofmt`/`goimports`, `go vet`, `staticcheck` or `golangci-lint` (pinned via `go.mod` `tool`), `go test -race` with coverage, `govulncheck`, one `make check` that CI runs verbatim
+- Run the fresh-session test from `repository-harness.md`: can a new session learn what/how-organized/how-to-run/how-to-verify/what's-next from files alone?
 - List concrete additions in priority order with one-line justifications
 - Surface the top 3–5 gaps with the highest impact, not an exhaustive audit
 
