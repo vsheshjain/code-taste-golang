@@ -40,6 +40,48 @@ It also ships as a [Claude Code Skill](https://code.claude.com/docs/en/skills) s
     └── arch_test.go                      # enforces the dependency rule
 ```
 
+## How a project should be structured
+
+A typical Go service built with these patterns. The full rationale lives in [project-structure.md](skills/code-taste-golang/docs/architecture/project-structure.md).
+
+```
+your-app/
+├── go.mod                        # module github.com/you/your-app
+├── cmd/
+│   └── api/
+│       └── main.go               # composition root: read config, build adapters, wire services, serve
+├── internal/                     # private to this module (enforced by the go tool)
+│   ├── list/                     # DOMAIN — structs, rules, sentinel errors; stdlib only
+│   │   ├── list.go
+│   │   └── list_test.go
+│   ├── app/                      # USE CASES — Service methods + the interfaces they consume
+│   │   ├── app.go                #   type Lists interface { Get(ctx, id) ...; Save(ctx, l) error }
+│   │   └── app_test.go           #   service tests over memory.Store and hand-written fakes
+│   ├── postgres/                 # ADAPTER — database/sql or pgx; implements app.Lists + UnitOfWork
+│   ├── memory/                   # ADAPTER — in-memory, for tests and local runs
+│   ├── openai/                   # ADAPTER — one package per external system, named for the tech
+│   └── httpapi/                  # ENTRYPOINT — decode, call service, encode, map errors to status
+├── arch_test.go                  # fails the build if an inner package imports an outer one
+└── Dockerfile
+```
+
+**Dependency rule.** Imports only point inward:
+
+```
+list (domain)  ←  app  ←  postgres / memory / openai  ←  httpapi  ←  cmd/api
+                     stdlib only at the centre; main wires everything
+```
+
+**Conventions that make it Go-shaped:**
+
+- **Interfaces live with the consumer.** `app` declares `Lists`; `postgres` just has the right methods. No `ports/` or `interfaces/` package.
+- **Constructors return concrete types.** `postgres.New(db)` returns `*postgres.DB`; `main` passes it where an `app.UnitOfWork` is expected.
+- **Packages are named for what they provide.** Use `list.ErrFull` and `postgres.New`. Avoid `models`, `utils`, `common`, `pkg/` and stutter like `list.ListService`.
+- **`context.Context` comes first** on every method that does I/O. Errors are wrapped with `%w` and matched with `errors.Is`.
+- **Tests sit beside the code.** Package choice gives you the test pyramid: domain unit tests, then service tests, then adapter integration tests, then `httptest` end-to-end.
+
+[`example/`](example/) is a working, stdlib-only version of this layout.
+
 ## Run the example
 
 Requires Go 1.24+.
