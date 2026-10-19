@@ -47,7 +47,7 @@ your-app/
 │   └── PROGRESS.md           # current state + next steps (only while work is in flight)
 ├── cmd/api/main.go
 ├── internal/
-│   ├── list/doc.go           # package doc comment = the module's architecture note
+│   ├── domain/listdom/doc.go # package doc comment = the package's architecture note
 │   └── ...
 └── arch_test.go              # the dependency rule as a failing test, with fix hints
 ```
@@ -71,8 +71,8 @@ Small HTTP service for user-owned reading lists. Hexagonal layout; stdlib only.
 - `make check`  — everything CI runs; must pass before any commit
 
 ## Hard rules (non-negotiable)
-1. `internal/list` imports stdlib only. `arch_test.go` enforces this.
-2. Interfaces are declared in the package that consumes them (`internal/app`).
+1. `internal/domain/*` imports stdlib only. `arch_test.go` enforces this.
+2. Interfaces are declared in the consuming service's `ports.go`.
 3. `context.Context` is the first parameter of every method that does I/O.
 4. Work on one feature at a time; don't refactor unrelated code in the same change.
 5. Done = `make check` passes. Not "the code looks right".
@@ -89,10 +89,9 @@ Guidance from the course: no more than ~15 hard rules; put the most critical rul
 The course recommends a short `ARCHITECTURE.md` inside each module directory. Go already has that slot: the **package doc comment**. It shows up in `go doc`, on pkg.go.dev, and in every editor hover, and it travels with the code when the package moves.
 
 ```go
-// Package app holds the use cases (application services) and the
-// interfaces they need from the outside world (the ports). Interfaces live
-// here, with their consumer, not next to their implementations.
-package app
+// Package listsvc holds the list use cases (application services) and, in
+// ports.go, the interfaces they need from the outside world.
+package listsvc
 ```
 
 Put the package's responsibility, its boundaries, and its non-obvious constraints there (move it to a `doc.go` once it outgrows the top of a file). Put facts about a type on the type, and facts about a config value on the field. Reserve markdown for decisions that span packages — those go in `docs/adr/`.
@@ -128,9 +127,9 @@ A rule in prose is a suggestion. A rule in a test is architecture. Go helps: imp
 The course's key detail is that **failure messages should tell the reader how to fix the problem**, not just that something failed:
 
 ```
-internal/memory imports internal/httpapi
-  WHY: adapters must not depend on entrypoints; the dependency rule points inward
-  FIX: move the shared type into internal/app or internal/list, or pass it in from cmd/api
+internal/repo/listrepo (repo) imports internal/httpapi (httpapi)
+  WHY: dependencies point inward: domain ← service ← repo/external/httpapi ← cmd
+  FIX: move the shared type inward (service ports.go or domain), or do the wiring in cmd/
 ```
 
 When the same review comment appears twice, promote it to a check: a `depguard` rule, a `go vet` analyzer, or one more case in `arch_test.go`.
@@ -156,7 +155,7 @@ For multi-session work, keep `docs/features.md` (or JSON). Every entry needs an 
 | id  | behavior                                   | verification                                         | state       | evidence |
 |-----|--------------------------------------------|------------------------------------------------------|-------------|----------|
 | F01 | POST /lists creates a list with a slug     | go test ./internal/httpapi -run TestListLifecycle    | passing     | a1b2c3d  |
-| F02 | Adding the 101st item returns 409          | go test ./internal/list -run TestAddItemFull         | passing     | a1b2c3d  |
+| F02 | Adding the 101st item returns 409          | go test ./internal/domain/listdom -run TestAddItemFull         | passing     | a1b2c3d  |
 | F03 | GET /lists?owner=u1 lists a user's lists   | go test ./internal/httpapi -run TestListByOwner      | active      |          |
 ```
 

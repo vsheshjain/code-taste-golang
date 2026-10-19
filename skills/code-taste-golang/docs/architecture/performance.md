@@ -40,7 +40,7 @@ Two ways in, same viewer.
 **From a test or benchmark:**
 
 ```sh
-go test -run=^$ -bench=BenchmarkSlugify -cpuprofile=cpu.out -memprofile=mem.out ./internal/list
+go test -run=^$ -bench=BenchmarkSlugify -cpuprofile=cpu.out -memprofile=mem.out ./internal/domain/listdom
 go tool pprof -http=:0 cpu.out
 ```
 
@@ -84,12 +84,12 @@ Reach for it when latency is high but CPU is low: goroutines stuck on a mutex, a
 
 ## Benchmarks: b.Loop and benchstat
 
-Write benchmarks next to the code ([`list_test.go`](../../../../example/internal/list/list_test.go)):
+Write benchmarks next to the code ([`list_test.go`](../../../../example/internal/domain/listdom/list_test.go)):
 
 ```go
 func BenchmarkSlugify(b *testing.B) {
 	for b.Loop() {
-		list.Slugify("A Fairly Long List Name With Some Punctuation!")
+		listdom.Slugify("A Fairly Long List Name With Some Punctuation!")
 	}
 }
 ```
@@ -99,9 +99,9 @@ func BenchmarkSlugify(b *testing.B) {
 A single benchmark run is noise. Compare before/after with `benchstat`:
 
 ```sh
-go test -run=^$ -bench=Slugify -count=10 ./internal/list > old.txt
+go test -run=^$ -bench=Slugify -count=10 ./internal/domain/listdom > old.txt
 # make the change
-go test -run=^$ -bench=Slugify -count=10 ./internal/list > new.txt
+go test -run=^$ -bench=Slugify -count=10 ./internal/domain/listdom > new.txt
 go run golang.org/x/perf/cmd/benchstat@latest old.txt new.txt
 ```
 
@@ -112,7 +112,7 @@ go run golang.org/x/perf/cmd/benchstat@latest old.txt new.txt
 **Escape analysis** tells you what the compiler moved to the heap:
 
 ```sh
-go build -gcflags='-m' ./internal/list 2>&1 | grep escapes
+go build -gcflags='-m' ./internal/domain/listdom 2>&1 | grep escapes
 ```
 
 Useful only after a heap profile points at a specific function. Don't contort code to avoid every escape.
@@ -218,7 +218,7 @@ Clean layering makes performance work dramatically easier. With ports and adapte
 
 ```
 POST /lists                       820ms
-└─ app.CreateList                 810ms
+└─ listsvc.CreateList                 810ms
    ├─ uow.Do                       30ms
    │  └─ postgres INSERT lists     12ms
    └─ summarizer.Summarize        780ms   ← obvious where time went

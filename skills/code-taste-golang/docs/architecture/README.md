@@ -14,10 +14,10 @@ A runnable, stdlib-only module that applies everything here lives at [`example/`
 
 ```mermaid
 flowchart TD
-    H["httpapi (entrypoint)<br/>decode → call → encode"] --> S["app.Service (use case)"]
-    S -->|"uow.Do(ctx, fn)"| U["UnitOfWork (port)"]
-    S -->|"l.AddItem(it)"| D["list.List (domain)"]
-    U -.implemented by.-> M["memory.Store / postgres.DB (adapter)"]
+    H["httpapi (entrypoint)<br/>decode → call → encode"] --> S["listsvc.Service (use case)"]
+    S -->|"uow.Do(ctx, fn)"| U["listsvc.UnitOfWork (port, in ports.go)"]
+    S -->|"l.AddItem(it)"| D["listdom.List (domain)"]
+    U -.implemented by.-> M["listrepo.File / pgtx (repo adapter)<br/>listsvctest.Store (fake)"]
     M -->|"load / save"| D
     M --> DB[("database")]
 ```
@@ -29,15 +29,15 @@ flowchart TD
 ```mermaid
 classDiagram
     class Summarizer {
-        <<interface, declared in package app>>
+        <<interface, in listsvc/ports.go>>
         Summarize(ctx, Request) (Summary, error)
     }
     class openai_Client {
-        <<package openai>>
+        <<package external/openai>>
         Summarize(ctx, Request) (Summary, error)
     }
     class fakeSummarizer {
-        <<in app_test.go>>
+        <<package listsvc/listsvctest>>
         Summarize(ctx, Request) (Summary, error)
     }
     openai_Client ..|> Summarizer : satisfies implicitly
@@ -46,25 +46,27 @@ classDiagram
 
 The **port is the shape of the hole; the adapter is the plug.** Two Go-specific twists:
 
-1. **The port lives with its consumer**, not with its implementation. `app` says "I need something that can `Summarize`"; `openai` never mentions `app.Summarizer` at all. Go interfaces are satisfied implicitly, so the adapter doesn't need to import the port. ([Code Review Comments: Interfaces](https://go.dev/wiki/CodeReviewComments#interfaces))
-2. **Constructors return concrete types.** `openai.New(...)` returns `*openai.Client`, not `app.Summarizer`. The conversion to the interface happens at the call site in `main`. *"Accept interfaces, return structs."*
+1. **The port lives with its consumer**, not with its implementation. `listsvc` says "I need something that can `Summarize`" in its `ports.go`; `openai` never mentions `listsvc.Summarizer` at all. Go interfaces are satisfied implicitly, so the adapter doesn't need to import the port. ([Code Review Comments: Interfaces](https://go.dev/wiki/CodeReviewComments#interfaces))
+2. **Constructors return concrete types.** `openai.New(...)` returns `*openai.Client`, not `listsvc.Summarizer`. The conversion to the interface happens at the call site in `main`. *"Accept interfaces, return structs."*
 
 ### The dependency rule (the only thing you must get right)
 
 ```
-internal/list        ←  imports stdlib only            (domain)
-internal/app         ←  imports list                   (use cases + the interfaces they need)
-internal/postgres    ←  imports list, app, SQL driver  (adapter)
-internal/httpapi     ←  imports app, list              (entrypoint)
-cmd/api              ←  imports everything             (the wiring — "bootstrap")
+internal/domain/<x>dom       ←  stdlib + upstream domains         (entities, rules, errors)
+internal/service/<x>svc      ←  domain                            (use cases + ports.go)
+  └── <x>svctest             ←  its service + domain              (fakes; _test.go only)
+internal/repo/<x>repo        ←  domain, service, SQL driver       (storage adapters)
+internal/external/<tech>     ←  domain, service, vendor SDK       (third-party adapters)
+internal/httpapi             ←  domain, service                   (entrypoint, wire DTOs)
+cmd/api                      ←  everything except fakes           (the wiring — "bootstrap")
 ```
 
 Arrows always point **inward toward the domain**. Go gives you two enforcement tools for free:
 
-- **Import cycles don't compile.** If `list` imports `app` while `app` imports `list`, the build fails. Most violations die here.
+- **Import cycles don't compile.** If `listdom` imports `listsvc` while `listsvc` imports `listdom`, the build fails. Most violations die here.
 - **`internal/` is private to the module.** Nothing outside your module can import your domain or adapters. ([`go` command: internal directories](https://go.dev/cmd/go#hdr-Internal_Directories))
 
-The violations a compiler can't see (one adapter importing another, an adapter importing an entrypoint) are caught by a ten-line test over `go list -deps` — see [`example/arch_test.go`](../../../../example/arch_test.go).
+The violations a compiler can't see (a service importing another service, an adapter importing an entrypoint, production code importing a fake) are caught by a small test over `go list` — see [`example/arch_test.go`](../../../../example/arch_test.go). The full layout and the reasons behind it are in [Project Structure](./project-structure.md).
 
 ## Reading order — the core five
 
@@ -104,14 +106,14 @@ Part II (events, message bus, CQRS) is intentionally skipped. Most services don'
 
 | Term | Plain English | Go shape |
 |---|---|---|
-| **Domain** | What your app is fundamentally about, in business terms | A package (`internal/list`) |
+| **Domain** | What your app is fundamentally about, in business terms | A package (`internal/domain/listdom`) |
 | **Entity** | A thing with identity that changes over time | A struct with an `ID` field and pointer-receiver methods |
-| **Value object** | A thing defined by its values | A small comparable struct, passed by value (`list.Item`) |
-| **Aggregate root** | The entity in charge of a cluster | The struct the repository returns (`*list.List`) |
+| **Value object** | A thing defined by its values | A small comparable struct, passed by value (`listdom.Item`) |
+| **Aggregate root** | The entity in charge of a cluster | The struct the repository returns (`*listdom.List`) |
 | **Domain error** | A named business failure | Sentinel `var ErrFull = errors.New(...)`, matched with `errors.Is` |
 | **Persistence ignorance** | The domain doesn't know how it's stored | Domain structs carry no `json`/`db` tags and import no drivers |
 | **Repository** | Collection-shaped access to storage | A small interface: `Get(ctx, id)`, `Save(ctx, v)` |
-| **Application service** | A use case: load → delegate → save | A method on `app.Service` taking `ctx` first |
+| **Application service** | A use case: load → delegate → save | A method on `listsvc.Service` taking `ctx` first |
 | **Port** | An interface the core depends on | An interface declared in the *consuming* package |
 | **Adapter** | A concrete implementation of a port | A package named after the tech (`postgres`, `stripe`) returning a concrete struct |
 | **Unit of Work** | Owns one transaction | `Do(ctx, func(Repos) error) error` — nil commits, error rolls back |

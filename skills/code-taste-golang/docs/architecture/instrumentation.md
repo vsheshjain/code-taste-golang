@@ -8,7 +8,7 @@ What to wire *into* your code for measurement: spans, health checks, metrics, be
 
 > **Auto-instrumentation tells you which SQL query was slow. Code-level instrumentation tells you which *use case* was slow. You want both, but most teams stop after auto-instrumentation and miss the second half.**
 
-The right amount: enough that a slow request's trace reads like a story ("request → app.AddItem → load list → save list"), not so much that every function call is a span.
+The right amount: enough that a slow request's trace reads like a story ("request → listsvc.AddItem → load list → save list"), not so much that every function call is a span.
 
 ## The default rule — don't instrument what's already free
 
@@ -46,7 +46,7 @@ Add 1–2 first; the rest only for a specific reason.
 The highest-leverage change. Auto-instrumentation shows you primitives (HTTP in, SQL, HTTP out); *you* know which use case they belong to.
 
 ```go
-package app
+package listsvc
 
 import (
 	"go.opentelemetry.io/otel"
@@ -55,11 +55,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-var tracer = otel.Tracer("github.com/vsheshjain/code-taste-golang/example/internal/app")
+var tracer = otel.Tracer("github.com/vsheshjain/code-taste-golang/example/internal/service/listsvc")
 
 // AddItem appends an item to a list: load, delegate, save.
-func (s *Service) AddItem(ctx context.Context, id list.ID, it list.Item) (err error) {
-	ctx, span := tracer.Start(ctx, "app.AddItem",
+func (s *Service) AddItem(ctx context.Context, id listdom.ID, it listdom.Item) (err error) {
+	ctx, span := tracer.Start(ctx, "listsvc.AddItem",
 		trace.WithAttributes(attribute.String("list.id", string(id))))
 	defer func() {
 		if err != nil {
@@ -69,7 +69,7 @@ func (s *Service) AddItem(ctx context.Context, id list.ID, it list.Item) (err er
 		span.End()
 	}()
 
-	// Body unchanged. The SQL spans nest under app.AddItem because ctx now carries the span.
+	// Body unchanged. The SQL spans nest under listsvc.AddItem because ctx now carries the span.
 	return s.uow.Do(ctx, func(r Repos) error {
 		l, err := r.Lists.Get(ctx, id)
 		if err != nil {
@@ -89,11 +89,11 @@ Three Go-specific points:
 - **`defer span.End()` on the next line.** A span that never ends is never exported.
 - **The tracer is a package-level variable obtained from the global provider.** `main` installs the real provider with `otel.SetTracerProvider`; until it does (including in tests), calls are no-ops. That's the one sanctioned global in this architecture.
 
-**Where to add spans:** each service method (one span per use case, named `app.CreateList`, `app.AddItem`), and multi-phase background jobs.
+**Where to add spans:** each service method (one span per use case, named `listsvc.CreateList`, `listsvc.AddItem`), and multi-phase background jobs.
 
 **Where not to:** domain methods (pure, microseconds), inside loops, or around calls already instrumented by `otelhttp`/`otelsql`.
 
-Should `internal/app` import OpenTelemetry at all? It's the pragmatic default: the OTel API is a thin, stable, vendor-neutral interface with a no-op default. If you want the service package dependency-free, a decorator in `cmd/api` that wraps `*app.Service` works too — but it duplicates every method signature. Most teams accept the import.
+Should `internal/service/listsvc` import OpenTelemetry at all? It's the pragmatic default: the OTel API is a thin, stable, vendor-neutral interface with a no-op default. If you want the service package dependency-free, a decorator in `cmd/api` that wraps `*listsvc.Service` works too — but it duplicates every method signature. Most teams accept the import.
 
 ### 2. Real health endpoints: /healthz and /readyz
 
@@ -157,7 +157,7 @@ Good enough for a single instance or a quick look. No percentiles, no labels.
 **OpenTelemetry metrics** — same SDK as tracing, exports to Prometheus, OTLP, Datadog:
 
 ```go
-var meter = otel.Meter("github.com/vsheshjain/code-taste-golang/example/internal/app")
+var meter = otel.Meter("github.com/vsheshjain/code-taste-golang/example/internal/service/listsvc")
 
 var listsCreated, _ = meter.Int64Counter("lists.created",
 	metric.WithDescription("Lists successfully created"))
@@ -186,17 +186,17 @@ Request rate, latency and error rate per route are already free from `otelhttp`.
 
 ### 4. Benchmarks for hot functions
 
-For CPU-bound functions where a regression matters — a parser, a slugger, an encoder. Lives next to the code ([`list_test.go`](../../../../example/internal/list/list_test.go)):
+For CPU-bound functions where a regression matters — a parser, a slugger, an encoder. Lives next to the code ([`list_test.go`](../../../../example/internal/domain/listdom/list_test.go)):
 
 ```go
 func BenchmarkSlugify(b *testing.B) {
 	for b.Loop() {
-		list.Slugify("A Fairly Long List Name With Some Punctuation!")
+		listdom.Slugify("A Fairly Long List Name With Some Punctuation!")
 	}
 }
 ```
 
-Run with `go test -run=^$ -bench=. -benchmem ./internal/list`; compare runs with `benchstat` (see [performance.md](./performance.md)). Not for code that does I/O — network variance swamps the signal.
+Run with `go test -run=^$ -bench=. -benchmem ./internal/domain/listdom`; compare runs with `benchstat` (see [performance.md](./performance.md)). Not for code that does I/O — network variance swamps the signal.
 
 ### 5. Latency budget assertions in tests
 
@@ -207,7 +207,7 @@ func TestCreateListLatencyBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("latency budget test")
 	}
-	svc := app.New(&memory.Store{}, func() list.ID { return list.ID(rand.Text()) })
+	svc := listsvc.New(&listsvctest.Store{}, func() listdom.ID { return listdom.ID(rand.Text()) })
 	srv := httptest.NewServer(httpapi.NewHandler(svc, slog.New(slog.DiscardHandler)))
 	defer srv.Close()
 
@@ -233,11 +233,11 @@ Keep the budget generous (several times the observed p99) so it only fires on re
 
 ## Worked example — instrumenting a use case end to end
 
-Assumes the `Service` from the example module gains a `log *slog.Logger` field, injected through `app.New` like everything else.
+Assumes the `Service` from the example module gains a `log *slog.Logger` field, injected through `listsvc.New` like everything else.
 
 ```go
-func (s *Service) CreateList(ctx context.Context, owner, name string) (_ *list.List, err error) {
-	ctx, span := tracer.Start(ctx, "app.CreateList", trace.WithAttributes(attribute.String("owner", owner)))
+func (s *Service) CreateList(ctx context.Context, owner, name string) (_ *listdom.List, err error) {
+	ctx, span := tracer.Start(ctx, "listsvc.CreateList", trace.WithAttributes(attribute.String("owner", owner)))
 	defer func() {
 		if err != nil {
 			span.RecordError(err)
@@ -246,7 +246,7 @@ func (s *Service) CreateList(ctx context.Context, owner, name string) (_ *list.L
 		span.End()
 	}()
 
-	l, err := list.New(s.newID(), owner, name)
+	l, err := listdom.New(s.newID(), owner, name)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (s *Service) CreateList(ctx context.Context, owner, name string) (_ *list.L
 ```
 
 What you get:
-- A span `app.CreateList` with `owner` and `list.id`, marked as error on failure
+- A span `listsvc.CreateList` with `owner` and `list.id`, marked as error on failure
 - Child spans (free, from `otelsql`): `BEGIN`, `INSERT`, `COMMIT`
 - A parent span (free, from `otelhttp`): `POST /lists`
 - A counter for the dashboard
@@ -290,7 +290,7 @@ A manual `"query lists"` span around `db.QueryContext` when `otelsql` is install
 ### Trap 3: forgetting to reassign ctx
 
 ```go
-_, span := tracer.Start(ctx, "app.AddItem") // ctx not updated
+_, span := tracer.Start(ctx, "listsvc.AddItem") // ctx not updated
 defer span.End()
 s.uow.Do(ctx, ...)                          // SQL spans attach to the HTTP span, not this one
 ```
@@ -332,7 +332,7 @@ Open your tracing UI, take the slowest 10% of requests, and look:
 
 | Symptom | What to add |
 |---|---|
-| A flat list of SQL and HTTP spans under the request | One span per use case in `internal/app` |
+| A flat list of SQL and HTTP spans under the request | One span per use case in `internal/service/listsvc` |
 | Total time visible, but not which phase | Child spans for each phase of the workflow |
 | Slow, but can't tell for which entity | Add the ID as a span attribute |
 | Use-case span is ~0ms but the request is slow | You didn't reassign `ctx` |

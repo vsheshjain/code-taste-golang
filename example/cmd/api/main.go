@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -13,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vsheshjain/code-taste-golang/example/internal/app"
+	"github.com/vsheshjain/code-taste-golang/example/internal/domain/listdom"
 	"github.com/vsheshjain/code-taste-golang/example/internal/httpapi"
-	"github.com/vsheshjain/code-taste-golang/example/internal/list"
-	"github.com/vsheshjain/code-taste-golang/example/internal/memory"
+	"github.com/vsheshjain/code-taste-golang/example/internal/repo/listrepo"
+	"github.com/vsheshjain/code-taste-golang/example/internal/service/listsvc"
 )
 
 func main() {
@@ -31,12 +32,10 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	addr := os.Getenv("ADDR")
-	if addr == "" {
-		addr = ":8080"
-	}
+	addr := cmp.Or(os.Getenv("ADDR"), ":8080")
+	dataFile := cmp.Or(os.Getenv("DATA_FILE"), "lists.json")
 
-	svc := app.New(&memory.Store{}, func() list.ID { return list.ID(rand.Text()) })
+	svc := listsvc.New(listrepo.New(dataFile), func() listdom.ID { return listdom.ID(rand.Text()) })
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           httpapi.NewHandler(svc, log),
@@ -45,7 +44,7 @@ func run(log *slog.Logger) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("listening", "addr", addr)
+	log.Info("listening", "addr", addr, "data_file", dataFile)
 
 	select {
 	case err := <-errc:

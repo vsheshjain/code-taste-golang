@@ -8,34 +8,12 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/vsheshjain/code-taste-golang/example/internal/app"
-	"github.com/vsheshjain/code-taste-golang/example/internal/list"
+	"github.com/vsheshjain/code-taste-golang/example/internal/domain/listdom"
+	"github.com/vsheshjain/code-taste-golang/example/internal/service/listsvc"
 )
 
-// listResponse is the wire shape. It is deliberately separate from
-// list.List so the JSON contract can change without touching the domain.
-type listResponse struct {
-	ID    string     `json:"id"`
-	Name  string     `json:"name"`
-	Slug  string     `json:"slug"`
-	Items []itemJSON `json:"items"`
-}
-
-type itemJSON struct {
-	URL   string `json:"url"`
-	Title string `json:"title,omitempty"`
-}
-
-func toResponse(l *list.List) listResponse {
-	items := make([]itemJSON, len(l.Items))
-	for i, it := range l.Items {
-		items[i] = itemJSON(it)
-	}
-	return listResponse{ID: string(l.ID), Name: l.Name, Slug: l.Slug, Items: items}
-}
-
 // NewHandler returns the API's routes.
-func NewHandler(svc *app.Service, log *slog.Logger) http.Handler {
+func NewHandler(svc *listsvc.Service, log *slog.Logger) http.Handler {
 	h := &handler{svc: svc, log: log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /lists", h.createList)
@@ -45,15 +23,12 @@ func NewHandler(svc *app.Service, log *slog.Logger) http.Handler {
 }
 
 type handler struct {
-	svc *app.Service
+	svc *listsvc.Service
 	log *slog.Logger
 }
 
 func (h *handler) createList(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Owner string `json:"owner"`
-		Name  string `json:"name"`
-	}
+	var req createListRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
@@ -67,7 +42,7 @@ func (h *handler) createList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getList(w http.ResponseWriter, r *http.Request) {
-	l, err := h.svc.GetList(r.Context(), list.ID(r.PathValue("id")))
+	l, err := h.svc.GetList(r.Context(), listdom.ID(r.PathValue("id")))
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -81,7 +56,7 @@ func (h *handler) addItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if err := h.svc.AddItem(r.Context(), list.ID(r.PathValue("id")), list.Item(req)); err != nil {
+	if err := h.svc.AddItem(r.Context(), listdom.ID(r.PathValue("id")), listdom.Item(req)); err != nil {
 		h.fail(w, r, err)
 		return
 	}
@@ -92,11 +67,11 @@ func (h *handler) addItem(w http.ResponseWriter, r *http.Request) {
 // knows both vocabularies.
 func (h *handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, list.ErrNotFound):
+	case errors.Is(err, listdom.ErrNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, list.ErrFull), errors.Is(err, list.ErrDuplicateItem):
+	case errors.Is(err, listdom.ErrFull), errors.Is(err, listdom.ErrDuplicateItem):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, list.ErrEmptyName):
+	case errors.Is(err, listdom.ErrEmptyName):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 	default:
 		h.log.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "err", err)

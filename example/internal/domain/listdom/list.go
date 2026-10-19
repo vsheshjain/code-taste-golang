@@ -1,6 +1,6 @@
-// Package list is the domain: a named list of items owned by one user,
+// Package listdom is the list domain: a named list of items owned by one user,
 // and the rules about it. It imports nothing outside the standard library.
-package list
+package listdom
 
 import (
 	"errors"

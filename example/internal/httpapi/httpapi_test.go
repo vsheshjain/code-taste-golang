@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vsheshjain/code-taste-golang/example/internal/app"
+	"github.com/vsheshjain/code-taste-golang/example/internal/domain/listdom"
 	"github.com/vsheshjain/code-taste-golang/example/internal/httpapi"
-	"github.com/vsheshjain/code-taste-golang/example/internal/list"
-	"github.com/vsheshjain/code-taste-golang/example/internal/memory"
+	"github.com/vsheshjain/code-taste-golang/example/internal/service/listsvc"
+	"github.com/vsheshjain/code-taste-golang/example/internal/service/listsvc/listsvctest"
 )
 
 func TestListLifecycle(t *testing.T) {
-	svc := app.New(&memory.Store{}, func() list.ID { return "l1" })
+	svc := listsvc.New(&listsvctest.Store{}, func() listdom.ID { return "l1" })
 	srv := httptest.NewServer(httpapi.NewHandler(svc, slog.New(slog.DiscardHandler)))
 	defer srv.Close()
 

@@ -12,10 +12,13 @@ If you understood Repository, you've already used the pattern. Adapter is the ge
 
 | Term | What it is in Go | Example |
 |---|---|---|
-| **Port** | An interface **declared in the package that consumes it** (`internal/app`). Small, often one or two methods. | `app.Lists`, `app.Summarizer`, `app.Payments` |
-| **Adapter** | A concrete struct in a package named after the technology it talks to. Satisfies the port implicitly. | `postgres.Lists`, `openai.Summarizer`, `stripe.Gateway` |
+| **Port** | An interface **declared in the service that consumes it**, in that service's `ports.go`. Small, often one or two methods. | `listsvc.Store`, `listsvc.Summarizer`, `billingsvc.Payments` |
+| **Adapter** | A concrete struct that satisfies the port implicitly. Storage adapters live in `internal/repo/<name>repo`; every other external system in `internal/external/<tech>`, named after the technology. | `listrepo.Lists`, `openai.Summarizer`, `stripe.Gateway` |
+| **Fake** | A hand-written, exported struct in a `<svc>test` package beside the port, `httptest`-style. Imported only from `_test.go` files. | `listsvctest.Store`, `listsvctest.FakeSummarizer` |
 
 Mental model: the **port is the shape of the hole**, the **adapter is the plug**. The service only knows the hole.
+
+Why two adapter folders? `repo/` holds data the app owns: its schema, its migrations, its transactions. `external/` holds systems someone else owns (an EMR vendor, an LLM provider, a payment gateway) that the app calls over the network. They fail differently, are tested differently, and the split tells a reader at a glance which is which.
 
 Go makes this cheaper than most languages because satisfaction is implicit. The adapter doesn't name the interface, doesn't embed a base class, and often doesn't import the consumer at all. Any type with the right methods fits. This is why Go puts interfaces on the consumer side: the consumer knows exactly which methods it needs, and the implementer doesn't have to guess ([Code Review Comments: Interfaces](https://go.dev/wiki/CodeReviewComments#interfaces)).
 
@@ -34,38 +37,39 @@ One port per external system, one adapter per technology, fixes all three.
 ## Repository is just one specific adapter
 
 ```
-app.Lists (interface, in internal/app)       ← port
+listsvc.Store (interface, in internal/service/listsvc/ports.go)   ← port
     ↑ satisfied implicitly by
-    ├── *postgres.Lists                        ← production
-    └── memory.Store's lists                   ← tests and local runs
+    ├── *listrepo.Lists   (internal/repo/listrepo)                 ← production (Postgres)
+    ├── *listrepo.File    (internal/repo/listrepo)                 ← the example's JSON file
+    └── listsvctest.Store (internal/service/listsvc/listsvctest)   ← fake for tests
 ```
 
 Same shape for an LLM:
 
 ```
-app.Summarizer
-    ├── *openai.Summarizer
-    ├── *anthropic.Summarizer
-    └── *fakeSummarizer   (in a _test.go file)
+listsvc.Summarizer
+    ├── *openai.Summarizer           (internal/external/openai)
+    ├── *anthropic.Summarizer        (internal/external/anthropic)
+    └── *listsvctest.FakeSummarizer  (beside the port)
 ```
 
 And for payments:
 
 ```
-app.Payments
-    ├── *stripe.Gateway
-    └── *fakePayments     (in a _test.go file)
+billingsvc.Payments
+    ├── *stripe.Gateway              (internal/external/stripe)
+    └── *billingsvctest.FakePayments (beside the port)
 ```
 
 Once you've seen one, you've seen them all.
 
 ## What it looks like
 
-Port and DTOs, declared by the consumer:
+Port and DTOs, declared by the consumer in its `ports.go`. Port DTOs live right next to the interface that uses them:
 
 ```go
-// internal/app/summarize.go
-package app
+// internal/service/listsvc/ports.go
+package listsvc
 
 type SummaryRequest struct {
 	Text     string
@@ -81,7 +85,14 @@ type Summarizer interface {
 	Summarize(ctx context.Context, req SummaryRequest) (Summary, error)
 }
 
-func (s *Service) Summarize(ctx context.Context, id list.ID) (Summary, error) {
+var ErrRateLimited = errors.New("summarizer rate limited")
+```
+
+The use case, in `service.go`, depends only on the port:
+
+```go
+// internal/service/listsvc/service.go
+func (s *Service) Summarize(ctx context.Context, id listdom.ID) (Summary, error) {
 	l, err := s.GetList(ctx, id)
 	if err != nil {
 		return Summary{}, err
@@ -90,10 +101,10 @@ func (s *Service) Summarize(ctx context.Context, id list.ID) (Summary, error) {
 }
 ```
 
-The real adapter, in a package named for the provider:
+The real adapter, under `external/`, in a package named for the provider:
 
 ```go
-// internal/openai/summarizer.go
+// internal/external/openai/summarizer.go
 package openai
 
 type Summarizer struct {
@@ -106,86 +117,90 @@ func NewSummarizer(client *http.Client, apiKey, model string) *Summarizer {
 	return &Summarizer{client: client, apiKey: apiKey, model: model}
 }
 
-func (s *Summarizer) Summarize(ctx context.Context, req app.SummaryRequest) (app.Summary, error) {
+func (s *Summarizer) Summarize(ctx context.Context, req listsvc.SummaryRequest) (listsvc.Summary, error) {
 	body, _ := json.Marshal(chatRequest{
 		Model:    s.model,
 		Messages: []message{{Role: "user", Content: fmt.Sprintf("Summarize in %d words: %s", req.MaxWords, req.Text)}},
 	})
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return app.Summary{}, err
+		return listsvc.Summary{}, err
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+s.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.client.Do(httpReq)
 	if err != nil {
-		return app.Summary{}, fmt.Errorf("openai: %w", err)
+		return listsvc.Summary{}, fmt.Errorf("openai: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return app.Summary{}, app.ErrRateLimited // translate to our vocabulary
+		return listsvc.Summary{}, listsvc.ErrRateLimited // translate to our vocabulary
 	}
 	if resp.StatusCode != http.StatusOK {
-		return app.Summary{}, fmt.Errorf("openai: status %d", resp.StatusCode)
+		return listsvc.Summary{}, fmt.Errorf("openai: status %d", resp.StatusCode)
 	}
 
 	var out chatResponse // unexported: the provider's shape stays here
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return app.Summary{}, fmt.Errorf("openai: decode: %w", err)
+		return listsvc.Summary{}, fmt.Errorf("openai: decode: %w", err)
 	}
-	return app.Summary{Text: out.Choices[0].Message.Content, TokensUsed: out.Usage.TotalTokens}, nil
+	return listsvc.Summary{Text: out.Choices[0].Message.Content, TokensUsed: out.Usage.TotalTokens}, nil
 }
 ```
 
-The fake, hand-written, in the test file that needs it:
+The fake, hand-written, in the service's test-helper package. It lives beside the port it implements, not beside `openai`, because it fakes *our* interface, not OpenAI's API. That's the standard library's pattern: `net/http/httptest`, `testing/fstest`, `io/iotest`.
 
 ```go
-// internal/app/summarize_test.go
-type fakeSummarizer struct {
-	reply string
-	calls []app.SummaryRequest
+// internal/service/listsvc/listsvctest/summarizer.go
+package listsvctest
+
+type FakeSummarizer struct {
+	Reply string
+	Calls []listsvc.SummaryRequest
 }
 
-func (f *fakeSummarizer) Summarize(_ context.Context, req app.SummaryRequest) (app.Summary, error) {
-	f.calls = append(f.calls, req)
-	return app.Summary{Text: f.reply, TokensUsed: 42}, nil
+func (f *FakeSummarizer) Summarize(_ context.Context, req listsvc.SummaryRequest) (listsvc.Summary, error) {
+	f.Calls = append(f.Calls, req)
+	return listsvc.Summary{Text: f.Reply, TokensUsed: 42}, nil
 }
 ```
+
+Exported, so the service tests *and* the HTTP end-to-end tests can share it. A fake used by exactly one test file can stay unexported in that file; promote it to `<svc>test` the second time it's needed.
 
 And the wiring, once, in [cmd/api/main.go](../../../../example/cmd/api/main.go):
 
 ```go
-svc := app.New(uow, openai.NewSummarizer(http.DefaultClient, cfg.OpenAIKey, "gpt-4o-mini"), newID)
+svc := listsvc.New(uow, openai.NewSummarizer(http.DefaultClient, cfg.OpenAIKey, "gpt-4o-mini"), newID)
 ```
 
 Things to notice:
 
-1. **The port defines its own DTOs.** `app.SummaryRequest`, not the provider's request type. The provider's `chatRequest`/`chatResponse` are unexported in `openai`, so they physically can't leak.
-2. **The adapter imports `app`** to name the DTOs in its method signature. That's allowed: adapters point inward. `app` never imports `openai`.
-3. **Errors are translated at the seam.** A 429 becomes `app.ErrRateLimited`, which the service or handler can match with `errors.Is`. Everything else is wrapped with `%w` and a prefix that names the adapter.
+1. **The port defines its own DTOs.** `listsvc.SummaryRequest`, in `ports.go`, not the provider's request type. The provider's `chatRequest`/`chatResponse` are unexported in `openai`, so they physically can't leak.
+2. **The adapter imports `listsvc`** to name the DTOs in its method signature. That's allowed: adapters point inward. `listsvc` never imports `openai`.
+3. **Errors are translated at the seam.** A 429 becomes `listsvc.ErrRateLimited`, which the service or handler can match with `errors.Is`. Everything else is wrapped with `%w` and a prefix that names the adapter.
 4. **`ctx` flows into the outgoing request** with `NewRequestWithContext`, so a cancelled HTTP request upstream cancels the LLM call.
-5. **The fake is a plain struct**, not a mock framework. It records calls in a slice; the test asserts on the slice. No `EXPECT()`, no generated code.
+5. **The fake is a plain struct** in `listsvctest`, not a mock framework. It records calls in a slice; the test asserts on the slice. No `EXPECT()`, no generated code. The example's [arch_test.go](../../../../example/arch_test.go) fails the build if non-test code imports a `<svc>test` package, so fakes can't leak into production wiring.
 
 ### Compile-time interface checks
 
 Because satisfaction is implicit, a typo in a method signature only surfaces where the adapter is passed to the service. To catch it in the adapter's own package, add one line:
 
 ```go
-var _ app.UnitOfWork = (*Store)(nil)
+var _ listsvc.UnitOfWork = (*File)(nil)
 ```
 
-The example's [memory adapter](../../../../example/internal/memory/memory.go) does exactly this. It costs nothing at runtime.
+The example's [listrepo](../../../../example/internal/repo/listrepo/listrepo.go) and its [fake](../../../../example/internal/service/listsvc/listsvctest/store.go) both do exactly this. It costs nothing at runtime.
 
 ## Real examples
 
-| External system | Port (in `app`) | Real adapter | Test adapter |
+| External system | Port (in the service's `ports.go`) | Real adapter | Fake (in `<svc>test`) |
 |---|---|---|---|
-| Storage | `Lists`, `UnitOfWork` | `postgres.Store` | `memory.Store` |
-| LLM | `Summarizer` | `openai.Summarizer` | `fakeSummarizer` |
-| Payments | `Payments` | `stripe.Gateway` | `fakePayments` |
-| Email | `Mailer` | `ses.Mailer` | `fakeMailer` |
-| Auth | `Verifier` | `clerk.Verifier` | `fakeVerifier` |
+| Storage | `listsvc.Store`, `listsvc.UnitOfWork` | `repo/listrepo` (+ `repo/pgtx` for shared transactions) | `listsvctest.Store` |
+| LLM | `listsvc.Summarizer` | `external/openai.Summarizer` | `listsvctest.FakeSummarizer` |
+| Payments | `billingsvc.Payments` | `external/stripe.Gateway` | `billingsvctest.FakePayments` |
+| EMR vendor | `emrsvc.EHRClient` | `external/epic.Client` | `emrsvctest.FakeEHR` |
+| Email | `notifysvc.Mailer` | `external/ses.Mailer` | `notifysvctest.FakeMailer` |
 
 ## What's in / what's out
 
@@ -215,7 +230,7 @@ type Summarizer interface {
 }
 ```
 
-`app` now imports the SDK, and the service unpacks provider JSON. Define your own `Summary` and let the adapter translate.
+`listsvc` now imports the SDK, and the service unpacks provider JSON. Define your own `Summary` and let the adapter translate.
 
 ### Trap 2: the adapter that's really a service
 
@@ -234,10 +249,10 @@ The adapter should be dumb: take a DTO, call the provider, translate back.
 
 ```go
 // adapter
-func (g *Gateway) Charge(ctx context.Context, req app.ChargeRequest) (app.ChargeResult, error)
+func (g *Gateway) Charge(ctx context.Context, req billingsvc.ChargeRequest) (billingsvc.ChargeResult, error)
 
 // service
-func (s *Service) Upgrade(ctx context.Context, userID user.ID, plan billing.Plan) error {
+func (s *Service) Upgrade(ctx context.Context, userID userdom.ID, plan billingdom.Plan) error {
 	u, err := s.users.Get(ctx, userID)
 	if err != nil {
 		return err
@@ -245,7 +260,7 @@ func (s *Service) Upgrade(ctx context.Context, userID user.ID, plan billing.Plan
 	if u.HasActiveSubscription() {
 		return nil
 	}
-	_, err = s.payments.Charge(ctx, app.ChargeRequest{Customer: u.BillingID, Amount: plan.Price()})
+	_, err = s.payments.Charge(ctx, ChargeRequest{Customer: u.BillingID, Amount: plan.Price()})
 	return err
 }
 ```
@@ -269,11 +284,11 @@ type PaymentGateway interface { Charge(...) }    // declared by the producer
 func New(...) PaymentGateway { return &gateway{} } // returns the interface
 ```
 
-This is the Java habit. It forces `app` to import `stripe` for the interface (an outward dependency), and it hides the concrete type. Return `*stripe.Gateway`; let `app` declare the slice of behaviour it needs.
+This is the Java habit. It forces `billingsvc` to import `external/stripe` for the interface (an outward dependency), and it hides the concrete type. Return `*stripe.Gateway`; let `billingsvc` declare the slice of behaviour it needs in its `ports.go`.
 
 ### Trap 5: mock frameworks for everything
 
-Generated mocks with `EXPECT().Summarize(gomock.Any()).Return(...)` test *how* the service calls its dependencies, line by line, and break on every refactor. A ten-line hand-written fake tests *what* happened. Reach for generated mocks only for large third-party interfaces you can't shrink, and even then prefer shrinking them.
+Generated mocks with `EXPECT().Summarize(gomock.Any()).Return(...)` test *how* the service calls its dependencies, line by line, and break on every refactor. A ten-line hand-written fake in `<svc>test` tests *what* happened, and one fake serves every test of that service. Reach for generated mocks only for large third-party interfaces you can't shrink, and even then prefer shrinking them.
 
 ### Trap 6: wrapping a wrapper
 
@@ -285,31 +300,32 @@ If you already use a library that abstracts several LLM providers, adding your o
 go list -f '{{.ImportPath}}: {{join .Imports " "}}' ./internal/... | grep -E 'stripe|openai|aws|pgx|database/sql'
 ```
 
-SDK imports should appear only in the package named after that SDK. A hit in `internal/app` or the domain is a leak.
+SDK imports should appear only in the `external/` package named after that SDK (or in `repo/` for database drivers). A hit in `internal/service/` or `internal/domain/` is a leak.
 
-Then grep for interfaces declared in adapter packages (`grep -rn 'interface {' internal/postgres internal/stripe ...`). Unexported helper interfaces (like a `querier` covering `*sql.DB` and `*sql.Tx`) are fine. Exported ones meant for consumers belong in the consumer.
+Then grep for interfaces declared in adapter packages (`grep -rn 'interface {' internal/repo internal/external`). Small helper interfaces the adapter itself consumes (like `listrepo.Querier`, covering `*sql.DB` and `*sql.Tx`) are fine. Interfaces meant for services belong in the service's `ports.go`.
 
 ## The hidden benefit
 
-**Ports force you to design your own DTOs.** Writing `app.SummaryRequest` makes you ask what the use case actually needs from a summariser. The answer is almost always two or three fields, not the provider's twenty. That smaller surface is what makes swapping providers, faking in tests, and reading the service all cheap.
+**Ports force you to design your own DTOs.** Writing `listsvc.SummaryRequest` makes you ask what the use case actually needs from a summariser. The answer is almost always two or three fields, not the provider's twenty. That smaller surface is what makes swapping providers, faking in tests, and reading the service all cheap.
 
 And because the interface lives with the consumer, it stays exactly as big as the consumer needs. The provider can grow forty methods; your port still has one.
 
 ## Self-check
 
-1. In Go, which package declares a port, and why not the adapter's package?
-2. Why can the `openai` adapter import `app`, but `app` can't import `openai`?
+1. In Go, which package declares a port, which file is it in, and why not the adapter's package?
+2. Why can the `openai` adapter import `listsvc`, but `listsvc` can't import `openai`?
 3. Your service calls the Stripe SDK directly. Name three things wrong with that.
-4. What does `var _ app.UnitOfWork = (*Store)(nil)` buy you?
+4. What does `var _ listsvc.UnitOfWork = (*File)(nil)` buy you?
 5. When is a `func() time.Time` better than a `Clock` interface?
 6. Why prefer a hand-written fake over a generated mock?
+7. Why does `FakeSummarizer` live in `listsvctest` rather than in `external/openai`?
 
 ## Things to steal
 
 - **The consumer declares the interface; the adapter just has the methods.**
-- **Accept interfaces, return structs.** Constructors return `*openai.Summarizer`, never `app.Summarizer`.
-- **Packages named for the technology:** `postgres`, `openai`, `stripe`. Not `adapters`, not `infra`.
+- **Accept interfaces, return structs.** Constructors return `*openai.Summarizer`, never `listsvc.Summarizer`.
+- **Two adapter homes:** `repo/<name>repo` for data you own, `external/<tech>` for systems you call. External packages are named for the technology: `openai`, `stripe`, `epic`.
 - **Your DTOs at the seam; provider types unexported in the adapter.**
 - **Translate errors at the seam,** wrap the rest with `%w`.
-- **Hand-written fakes beside the tests.**
+- **Hand-written fakes beside the port,** in `<svc>test`, imported only from tests.
 - **The rent test:** a real second implementation or a fake you use today. Otherwise, a function value or nothing.

@@ -28,9 +28,9 @@ The architecture exists *because* it makes tests cheap. Pure domain package → 
 
 | Type | Package under test | Speed | Count | Example |
 |---|---|---|---|---|
-| **Unit** | `internal/list` (domain) | microseconds | hundreds | `TestAddItemFull` |
-| **Service** | `internal/app` with `memory.Store` | milliseconds | tens to low hundreds | `TestCreateListAssignsSlug` |
-| **Integration** | `internal/postgres` against a real DB | hundreds of ms | tens | `TestListsRoundTrip` |
+| **Unit** | `internal/domain/listdom` (domain) | microseconds | hundreds | `TestAddItemFull` |
+| **Service** | `internal/service/listsvc` with `listsvctest.Store` | milliseconds | tens to low hundreds | `TestCreateListAssignsSlug` |
+| **Integration** | `internal/repo/listrepo` (or a Postgres `internal/repo/<x>repo`) running the contract suite against the real store | ms to hundreds of ms | tens | `TestFile` |
 | **E2E** | `internal/httpapi` via `httptest.NewServer` | tens of ms to seconds | a few per critical flow | `TestListLifecycle` |
 
 The inverse pyramid (lots of e2e, few unit) is a smell. It means your business rules can't be exercised without HTTP or a database — which means they aren't actually in the domain package.
@@ -41,7 +41,7 @@ The inverse pyramid (lots of e2e, few unit) is a smell. It means your business r
 
 Test **one domain package** with **no I/O**: no DB, no HTTP, no filesystem, no wall clock, no randomness you don't control.
 
-The idiomatic shape is the **table-driven test** with `t.Run` subtests ([`list_test.go`](../../../../example/internal/list/list_test.go)):
+The idiomatic shape is the **table-driven test** with `t.Run` subtests ([`list_test.go`](../../../../example/internal/domain/listdom/list_test.go)):
 
 ```go
 func TestSlugify(t *testing.T) {
@@ -55,7 +55,7 @@ func TestSlugify(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := list.Slugify(tt.name); got != tt.want {
+			if got := listdom.Slugify(tt.name); got != tt.want {
 				t.Errorf("Slugify(%q) = %q, want %q", tt.name, got, tt.want)
 			}
 		})
@@ -68,21 +68,21 @@ Adding a case is one line. Each case gets its own name in the output, and you ca
 Domain errors are sentinel values, so the assertion is `errors.Is`, never a string compare:
 
 ```go
-if err := l.AddItem(list.Item{URL: "https://go.dev"}); !errors.Is(err, list.ErrDuplicateItem) {
+if err := l.AddItem(listdom.Item{URL: "https://go.dev"}); !errors.Is(err, listdom.ErrDuplicateItem) {
 	t.Fatalf("duplicate add: err = %v, want ErrDuplicateItem", err)
 }
 ```
 
-If a unit test in `internal/list` needs a database driver or an HTTP client, **the code being tested isn't domain** — infrastructure has leaked in. The test is telling you about an architecture problem, not a test problem.
+If a unit test in `internal/domain/listdom` needs a database driver or an HTTP client, **the code being tested isn't domain** — infrastructure has leaked in. The test is telling you about an architecture problem, not a test problem.
 
-### Service tests — using the in-memory adapter
+### Service tests — using the `listsvctest` fakes
 
-Test **one use case** with **in-memory adapters in place of real ones**. This is where consumer-side interfaces pay off: `app.Service` takes an `app.UnitOfWork`, and `memory.Store` satisfies it ([`app_test.go`](../../../../example/internal/app/app_test.go)):
+Test **one use case** with **fakes in place of real adapters**. This is where consumer-side interfaces pay off: `listsvc.Service` takes a `listsvc.UnitOfWork` (declared in [`ports.go`](../../../../example/internal/service/listsvc/ports.go)), and `listsvctest.Store` satisfies it ([`service_test.go`](../../../../example/internal/service/listsvc/service_test.go)):
 
 ```go
 func TestCreateListAssignsSlug(t *testing.T) {
 	ctx := context.Background()
-	svc := app.New(&memory.Store{}, func() list.ID { return "l1" })
+	svc := listsvc.New(&listsvctest.Store{}, func() listdom.ID { return "l1" })
 
 	if _, err := svc.CreateList(ctx, "u1", "My Stuff"); err != nil {
 		t.Fatal(err)
@@ -97,9 +97,31 @@ func TestCreateListAssignsSlug(t *testing.T) {
 }
 ```
 
-Two things make this cheap. The ID generator is an injected `func() list.ID`, so IDs are deterministic. And the zero value of `memory.Store` is ready to use, so there is no setup function to forget.
+Two things make this cheap. The ID generator is an injected `func() listdom.ID`, so IDs are deterministic. And the zero value of `listsvctest.Store` is ready to use, so there is no setup function to forget.
 
-The unit of work also gives you rollback tests for free — return an error from inside `Do` and assert nothing was written (`TestFailedUseCaseRollsBack`).
+The fakes live in their own package beside the ports they fake — `internal/service/listsvc/listsvctest`, the same pattern as the standard library's `net/http/httptest` and `testing/fstest`. A fake implements *your* interface, not the vendor's API, so it belongs with the interface. Import `<x>svctest` packages only from `_test.go` files; `arch_test.go` fails the build if production code imports one.
+
+Rule violations are service tests too: `TestAddItemRuleViolationSavesNothing` adds a duplicate item and asserts the list still has exactly one.
+
+### Contract tests — keeping the fakes honest
+
+A fake is only useful if it behaves like the real adapter. [`listsvctest/contract.go`](../../../../example/internal/service/listsvc/listsvctest/contract.go) exports one suite that every `listsvc.UnitOfWork` must pass — missing list is `ErrNotFound`, a committed save is readable, an error rolls back:
+
+```go
+// listsvctest's own test runs it against the fake…
+func TestStore(t *testing.T) {
+	listsvctest.TestUnitOfWork(t, func(*testing.T) listsvc.UnitOfWork { return &listsvctest.Store{} })
+}
+
+// …and the real adapter's test runs the same suite.
+func TestFile(t *testing.T) {
+	listsvctest.TestUnitOfWork(t, func(t *testing.T) listsvc.UnitOfWork {
+		return listrepo.New(filepath.Join(t.TempDir(), "lists.json"))
+	})
+}
+```
+
+If the fake and the real store ever disagree, one of them fails. It's the same idea as `testing/fstest.TestFS`: the package that defines the contract ships the test for it.
 
 ### Integration tests — real adapter, real external system
 
@@ -108,19 +130,20 @@ Test **the adapter itself**, against the real thing. This is the **only** place 
 ```go
 //go:build integration
 
-package postgres_test
+package listrepo_test
 
-func TestListsRoundTrip(t *testing.T) {
+func TestPostgres(t *testing.T) {
 	db := openTestDB(t) // reads DATABASE_URL, calls t.Skip if unset, registers t.Cleanup
-	repo := postgres.NewLists(db)
-	// save, reload, compare
+	listsvctest.TestUnitOfWork(t, func(t *testing.T) listsvc.UnitOfWork {
+		return listrepo.NewPostgres(db) // hypothetical Postgres adapter; truncates tables per call
+	})
 }
 ```
 
 Run with `go test -tags integration ./...`. The alternative is a runtime check:
 
 ```go
-func TestListsRoundTrip(t *testing.T) {
+func TestPostgres(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test; skipped with -short")
 	}
@@ -130,14 +153,14 @@ func TestListsRoundTrip(t *testing.T) {
 
 Build tags are clearer when the test needs extra dependencies to even compile; `testing.Short()` is fine when it only needs a running service. Pick one per repo and stick to it.
 
-Write **few** of these — roughly one per adapter method with non-trivial mapping (row ↔ entity, SQL error ↔ domain error). Their job is to catch SQL and mapping mistakes, not to retest domain rules.
+Integration tests live in the adapter's own package (`internal/repo/<x>repo`, `internal/external/<tech>`). The example's [`listrepo_test.go`](../../../../example/internal/repo/listrepo/listrepo_test.go) needs no build tag because its "real thing" is a file in `t.TempDir()`. Write **few** of these beyond the contract suite — roughly one per adapter method with non-trivial mapping (row ↔ entity, SQL error ↔ domain error). Their job is to catch SQL and mapping mistakes, not to retest domain rules.
 
 ### E2E tests — the full stack
 
 Go's `net/http/httptest` runs your real handler on a real loopback listener with no external process ([`httpapi_test.go`](../../../../example/internal/httpapi/httpapi_test.go)):
 
 ```go
-svc := app.New(&memory.Store{}, func() list.ID { return "l1" })
+svc := listsvc.New(&listsvctest.Store{}, func() listdom.ID { return "l1" })
 srv := httptest.NewServer(httpapi.NewHandler(svc, slog.New(slog.DiscardHandler)))
 defer srv.Close()
 ```
@@ -150,7 +173,7 @@ Write **very few** of these — one table per critical flow. Their job is to cat
 
 | Term | What it does | In Go |
 |---|---|---|
-| **Fake** | A working, simpler implementation | `memory.Store`. The default. |
+| **Fake** | A working, simpler implementation | `listsvctest.Store`. The default. |
 | **Stub** | Returns canned values, no behavior | A struct whose method returns a fixed value |
 | **Mock** | Records calls and asserts on expectations | `gomock` / `mockery` generated code |
 | **Spy** | A real or fake object that also records calls | A fake with a `calls []Request` field |
@@ -169,7 +192,7 @@ func (f *fakeSummarizer) Summarize(ctx context.Context, text string) (string, er
 }
 ```
 
-Build the fake once, next to the port's consumer or in its own package, and reuse it everywhere. That beats 200 tests each configuring their own generated mock. Mock generators are a sign the interface is too big — see "Rent test" in [adapter.md](./adapter.md).
+Build the fake once, in the service's `<x>svctest` package next to the port it fakes, and reuse it everywhere. That beats 200 tests each configuring their own generated mock. Mock generators are a sign the interface is too big — see "Rent test" in [adapter.md](./adapter.md).
 
 ## The `go test` toolbox — what you actually type
 
@@ -190,11 +213,11 @@ Use `t.Errorf` to keep going and report every failing case; use `t.Fatalf` only 
 ### Helpers and cleanup
 
 ```go
-func newService(t *testing.T) *app.Service {
+func newService(t *testing.T) *listsvc.Service {
 	t.Helper() // failures report the caller's line, not this one
-	store := &memory.Store{}
+	store := &listsvctest.Store{}
 	t.Cleanup(func() { /* close things, runs after the test and its subtests */ })
-	return app.New(store, func() list.ID { return "l1" })
+	return listsvc.New(store, func() listdom.ID { return "l1" })
 }
 ```
 
@@ -209,11 +232,11 @@ func TestSomething(t *testing.T) {
 }
 ```
 
-`t.Parallel()` lets independent tests run concurrently. It only helps if tests don't share state — another reason the zero-value `memory.Store` per test is the right default. Since Go 1.22, loop variables are per-iteration, so the old `tt := tt` copy is no longer needed.
+`t.Parallel()` lets independent tests run concurrently. It only helps if tests don't share state — another reason the zero-value `listsvctest.Store` per test is the right default. Since Go 1.22, loop variables are per-iteration, so the old `tt := tt` copy is no longer needed.
 
 ### External test packages
 
-Name test files' package `foo_test` (as the example does: `package list_test`, `package app_test`). The test then sees only the exported API, exactly like a real caller. Use the internal `package foo` form only when you genuinely need to test an unexported helper.
+Name test files' package `foo_test` (as the example does: `package listdom_test`, `package listsvc_test`). The test then sees only the exported API, exactly like a real caller. Use the internal `package foo` form only when you genuinely need to test an unexported helper.
 
 ### testdata/ and golden files
 
@@ -248,9 +271,9 @@ Native since Go 1.18. Great for parsers and normalizers like `Slugify`:
 func FuzzSlugify(f *testing.F) {
 	f.Add("My Stuff")
 	f.Fuzz(func(t *testing.T, name string) {
-		s := list.Slugify(name)
-		if s != list.Slugify(s) {
-			t.Errorf("Slugify not idempotent: %q -> %q -> %q", name, s, list.Slugify(s))
+		s := listdom.Slugify(name)
+		if s != listdom.Slugify(s) {
+			t.Errorf("Slugify not idempotent: %q -> %q -> %q", name, s, listdom.Slugify(s))
 		}
 	})
 }
@@ -284,7 +307,7 @@ No `time.Sleep` in tests, ever.
 | `go test ./...` | Every package |
 | `go test -race ./...` | With the race detector. Run this in CI, always. |
 | `go test -count=1 ./...` | Bypass the test cache |
-| `go test -run 'TestAddItem$' ./internal/list` | One test (regexp) |
+| `go test -run 'TestAddItem$' ./internal/domain/listdom` | One test (regexp) |
 | `go test -short ./...` | Skip tests that check `testing.Short()` |
 | `go test -tags integration ./...` | Include build-tagged integration tests |
 | `go test -coverprofile=c.out ./... && go tool cover -html=c.out` | Coverage, line by line |
@@ -292,17 +315,21 @@ No `time.Sleep` in tests, ever.
 
 ### The architecture test
 
-The dependency rule is enforced by a test, not by a wiki page. [`arch_test.go`](../../../../example/arch_test.go) shells out to `go list -deps` and fails if, say, `internal/memory` imports `internal/httpapi`:
+The dependency rule is enforced by a test, not by a wiki page. [`arch_test.go`](../../../../example/arch_test.go) runs `go list` over every package, classifies each import by layer, and fails with a WHY/FIX message if, say, `internal/repo/listrepo` imports `internal/httpapi`:
 
 ```go
-forbidden := map[string][]string{
-	"list":   {"app", "memory", "httpapi"},
-	"app":    {"memory", "httpapi"},
-	"memory": {"httpapi"},
+var allowed = map[string][]string{
+	"domain":   {"domain"},
+	"service":  {"domain"},
+	"svctest":  {"domain", "service"},
+	"repo":     {"domain", "service"},
+	"external": {"domain", "service"},
+	"httpapi":  {"domain", "service"},
+	"cmd":      {"domain", "service", "repo", "external", "httpapi"},
 }
 ```
 
-Go's import-cycle ban already catches inner→outer imports when the outer package imports the inner one; this test catches the rest (adapter importing entrypoint, and so on). For bigger repos, `depguard` in `golangci-lint` does the same job declaratively.
+It also rejects service→service imports. `go list`'s `.Imports` excludes test files, which is exactly what lets a repo's `_test.go` import the `<x>svctest` contract suite while production code can't. Go's import-cycle ban already catches some violations; this test catches the rest (adapter importing entrypoint, `cmd` importing a fake, and so on). For bigger repos, `depguard` in `golangci-lint` does the same job declaratively.
 
 ## What makes a good test
 
@@ -319,9 +346,10 @@ A good test name: `TestAddItemRejectsDuplicateURL`. A bad one: `TestAddItem2`, `
 
 | Package | Test type | Why it's cheap |
 |---|---|---|
-| `internal/list` | Unit | Pure Go, stdlib only, no setup |
-| `internal/app` | Service | Inject `&memory.Store{}` and a fixed ID func |
-| `internal/postgres` (adapter) | Integration | Real DB, but only for this package |
+| `internal/domain/listdom` | Unit | Pure Go, stdlib only, no setup |
+| `internal/service/listsvc` | Service | Inject `&listsvctest.Store{}` and a fixed ID func |
+| `internal/service/listsvc/listsvctest` | Contract | The fake runs the same suite as the real adapter |
+| `internal/repo/listrepo` (adapter) | Integration | Contract suite against the real store, only in this package |
 | `internal/httpapi` | E2E | `httptest` + full stack, a handful of cases |
 | `cmd/api` | none | `main` only wires; keep logic out so there's nothing to test |
 
@@ -358,7 +386,7 @@ Package-level variables, a shared `*sql.DB` that tests write to without cleanup,
 
 ```go
 func TestListName(t *testing.T) {
-	l := list.List{Name: "x"}
+	l := listdom.List{Name: "x"}
 	if l.Name != "x" { t.Fail() }
 }
 ```
@@ -382,7 +410,7 @@ A flaky test is worse than no test: it trains everyone to rerun until green. Run
 **Always test:**
 - Domain rules with real logic (`AddItem` limits, `New` validation)
 - Use cases that touch money, auth or data integrity
-- Error mapping at seams (SQL error → `list.ErrNotFound`, domain error → HTTP status)
+- Error mapping at seams (SQL error → `listdom.ErrNotFound`, domain error → HTTP status)
 - Bug fixes — write the failing test first
 
 **Often skip:**
@@ -401,14 +429,16 @@ A flaky test is worse than no test: it trains everyone to rerun until green. Run
 3. Your service test needs a running Postgres. What's wrong, architecturally?
 4. A test passes alone but fails with `-shuffle=on`. What's the likely cause?
 5. Why is `time.Sleep` in a test a bug, and what replaces it?
-6. Why use `package list_test` instead of `package list` for tests?
+6. Why use `package listdom_test` instead of `package listdom` for tests?
 
 ## Things to steal
 
 - **Table-driven tests with `t.Run`.** The default shape for anything with more than one case.
 - **got X, want Y.** Failure messages that need no debugger.
 - **One fake per port, hand-written, reused everywhere.** Small interfaces make this ten lines.
-- **Zero-value-ready fakes** (`&memory.Store{}`) mean no setup to forget and free parallelism.
+- **Fakes live in `<x>svctest`, beside the ports.** Same pattern as `httptest`; imported only from tests.
+- **A contract suite keeps fakes honest.** The fake and the real adapter run the same `TestUnitOfWork`.
+- **Zero-value-ready fakes** (`&listsvctest.Store{}`) mean no setup to forget and free parallelism.
 - **`-race` in CI, always.** It costs minutes and saves outages.
 - **Integration tests behind a build tag or `-short`.** Fast loop locally, full suite in CI.
 - **`synctest` instead of `time.Sleep`.** Deterministic time, instant tests.

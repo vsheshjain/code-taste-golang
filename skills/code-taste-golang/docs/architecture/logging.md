@@ -215,7 +215,7 @@ slog has four: `Debug`, `Info`, `Warn`, `Error`.
 - `Warn` — unexpected but handled: a retry succeeded, a fallback was used.
 - `Error` — something is broken and someone should look.
 
-A `list.ErrNotFound` is **not** an error log — it's an expected 404. In the example's [`httpapi.fail`](../../../../example/internal/httpapi/httpapi.go), domain errors map to 4xx silently; only the `default` branch (truly unexpected) logs at `Error`.
+A `listdom.ErrNotFound` is **not** an error log — it's an expected 404. In the example's [`httpapi.fail`](../../../../example/internal/httpapi/httpapi.go), domain errors map to 4xx silently; only the `default` branch (truly unexpected) logs at `Error`.
 
 Use `slog.LevelVar` if you want to flip the level at runtime without a restart.
 

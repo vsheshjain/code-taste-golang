@@ -33,14 +33,14 @@ The full doc set is at `./docs/architecture/`:
 ## Step 2 — Match task to review mode
 
 **"Review this code":**
-- Identify the package's layer (domain / app / adapter / entrypoint / `cmd`)
+- Identify the package's layer (`domain/<x>dom` / `service/<x>svc` / `repo` / `external` / `httpapi` / `cmd`)
 - Check that layer's "Traps" section from its doc
 - Verify the dependency rule (`go list -deps ./internal/<pkg>` — does anything inner import something outer?)
 - Check the Go-specific smells below
 
 **"Structure this new feature":**
 - Sketch the package layout from `project-structure.md`
-- Put each interface in the package that *consumes* it; name the adapter package after the technology (`postgres`, `stripe`)
+- Put each interface in the consuming service's `ports.go`; storage adapters go in `repo/<x>repo`, third-party ones in `external/<tech>`, fakes in `<x>svctest`
 - Identify the right test boundary (domain unit / service with in-memory adapter / integration / e2e with `httptest`)
 - Don't over-layer if the feature is small — match rigor to scope
 
@@ -60,10 +60,12 @@ The full doc set is at `./docs/architecture/`:
 
 ## Go-specific smells to check
 
-- Interface declared next to its only implementation (producer side) instead of in the consumer package
+- Interface declared next to its only implementation (producer side) instead of in the consuming service's `ports.go`
+- Fakes living beside adapters instead of in the `<x>svctest` package beside the ports; no contract suite shared by fake and real adapter
+- A service importing another service, or wire/row DTOs leaking into `domain/`
 - Function returns an interface instead of a concrete struct
 - Packages named `utils`, `common`, `helpers`, `models`, `types`, `base` — or a `pkg/` dir in an application
-- Stutter: `list.ListService`, `user.UserRepository`
+- Stutter: `listsvc.ListService`, `patientrepo.PatientRepository` (the suffix already names the layer)
 - `context.Context` stored in a struct, or not the first parameter of an I/O call
 - Errors compared with `==` against wrapped errors, or `err.Error()` string matching; adapter leaking `sql.ErrNoRows`/SDK errors upward
 - Log-and-return (same error logged at every layer); `log.Fatal`/`os.Exit` outside `main`
@@ -92,11 +94,13 @@ Match length to task. A simple "is this right?" gets a 5-line answer. A full cod
 ## Quick reference — the dependency rule (load-bearing)
 
 ```
-internal/<domain>    ←  imports stdlib only
-internal/app         ←  imports domain (declares the port interfaces it consumes)
-internal/<adapter>   ←  imports domain, app (for port types), external SDKs
-internal/<entrypoint>←  imports app, domain
-cmd/<binary>         ←  imports everything (the wiring)
+internal/domain/<x>dom     ←  stdlib + upstream domains (entities, rules, sentinel errors)
+internal/service/<x>svc    ←  domain (use cases; ports.go declares every outside need + port DTOs)
+  └── <x>svctest           ←  its service + domain (fakes + contract suites; _test.go only)
+internal/repo/<x>repo      ←  domain, service (storage adapters; row shapes unexported here)
+internal/external/<tech>   ←  domain, service (third-party adapters)
+internal/httpapi           ←  domain, service (entrypoint; wire DTOs in dto.go)
+cmd/<binary>               ←  everything except fakes (the wiring)
 ```
 
-Arrows point inward. Go's ban on import cycles catches most violations at compile time; a test running `go list -deps` catches the rest (adapter→adapter, adapter→entrypoint). See `example/arch_test.go`.
+Arrows point inward. Services never import other services. Go's ban on import cycles catches most violations at compile time; `example/arch_test.go` catches the rest with WHY/FIX messages. Rationale for each choice: `docs/architecture/project-structure.md`.
