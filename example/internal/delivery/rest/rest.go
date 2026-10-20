@@ -1,6 +1,6 @@
-// Package httpapi is the HTTP entrypoint: decode the request, call the
+// Package rest is the REST delivery adapter: decode the request, call the
 // service, encode the response. No business rules, no storage.
-package httpapi
+package rest
 
 import (
 	"encoding/json"

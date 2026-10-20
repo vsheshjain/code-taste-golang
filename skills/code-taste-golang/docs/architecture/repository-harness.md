@@ -127,8 +127,8 @@ A rule in prose is a suggestion. A rule in a test is architecture. Go helps: imp
 The course's key detail is that **failure messages should tell the reader how to fix the problem**, not just that something failed:
 
 ```
-internal/repo/listrepo (repo) imports internal/httpapi (httpapi)
-  WHY: dependencies point inward: domain ← service ← repo/external/httpapi ← cmd
+internal/repo/listrepo (repo) imports internal/delivery/rest (delivery)
+  WHY: dependencies point inward: domain ← service ← repo/gateway/delivery ← cmd
   FIX: move the shared type inward (service ports.go or domain), or do the wiring in cmd/
 ```
 
@@ -154,9 +154,9 @@ For multi-session work, keep `docs/features.md` (or JSON). Every entry needs an 
 ```markdown
 | id  | behavior                                   | verification                                         | state       | evidence |
 |-----|--------------------------------------------|------------------------------------------------------|-------------|----------|
-| F01 | POST /lists creates a list with a slug     | go test ./internal/httpapi -run TestListLifecycle    | passing     | a1b2c3d  |
+| F01 | POST /lists creates a list with a slug     | go test ./internal/delivery/rest -run TestListLifecycle    | passing     | a1b2c3d  |
 | F02 | Adding the 101st item returns 409          | go test ./internal/domain/listdom -run TestAddItemFull         | passing     | a1b2c3d  |
-| F03 | GET /lists?owner=u1 lists a user's lists   | go test ./internal/httpapi -run TestListByOwner      | active      |          |
+| F03 | GET /lists?owner=u1 lists a user's lists   | go test ./internal/delivery/rest -run TestListByOwner      | active      |          |
 ```
 
 States are `not_started`, `active`, `blocked`, `passing`. Only **one** `active` at a time. Size each feature to one session ("add an item to a list", not "build lists"). In Go, the verification is almost always a `go test -run` command — which is a strong nudge to write the test first.

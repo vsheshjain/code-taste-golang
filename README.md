@@ -12,6 +12,7 @@ It also ships as a [Claude Code Skill](https://code.claude.com/docs/en/skills) s
 .
 ├── .claude-plugin/
 │   └── marketplace.json                  # makes this installable as a plugin
+├── docs/img/                             # architecture diagrams (hand-written SVG)
 ├── skills/
 │   └── code-taste-golang/
 │       ├── SKILL.md                      # the Claude Code skill entrypoint
@@ -40,7 +41,7 @@ It also ships as a [Claude Code Skill](https://code.claude.com/docs/en/skills) s
     │   ├── service/listsvc/              # use cases; ports.go declares the interfaces
     │   │   └── listsvctest/              # fakes + contract suite for those ports
     │   ├── repo/listrepo/                # storage adapter (JSON file), passes the contract suite
-    │   └── httpapi/                      # entrypoint; wire DTOs in dto.go
+    │   └── delivery/rest/                # REST entrypoint; wire DTOs in dto.go
     └── arch_test.go                      # enforces the dependency rule
 ```
 
@@ -72,15 +73,21 @@ your-app/
 │   │
 │   ├── repo/                          # STORAGE ADAPTERS: data the app owns
 │   │   ├── patientrepo/               # implements patientsvc ports; runs patientsvctest's contract suite
+│   │   │   └── rows.go                # persistence DTOs: unexported row structs ↔ domain
 │   │   ├── emrrepo/
 │   │   ├── hospitalrepo/
 │   │   └── pgtx/                      # one *sql.Tx across domains; migrations/ embedded here
 │   │
-│   ├── external/                      # EXTERNAL ADAPTERS: third-party systems, one package each
-│   │   ├── epic/                      # implements emrsvc.EHRClient
-│   │   └── openai/
+│   ├── gateway/                       # GATEWAYS: third-party systems the app calls, one package per vendor
+│   │   ├── epicgw/                    # implements emrsvc.EHRClient; Epic's JSON shapes unexported here
+│   │   └── openaigw/
 │   │
-│   └── httpapi/                       # ENTRYPOINT: handlers, wire DTOs (dto.go), error → status
+│   └── delivery/                      # ENTRYPOINTS: how requests reach the app; no business rules
+│       ├── rest/
+│       │   ├── rest.go                # routes, handlers, error → status
+│       │   └── dto.go                 # WIRE DTOs: JSON request/response structs
+│       ├── grpcapi/                   # gRPC server; generated protobuf types are its wire DTOs
+│       └── consumer/                  # queue/event consumers; message DTOs in dto.go
 │
 ├── arch_test.go                       # enforces the dependency rule, with WHY/FIX messages
 └── docs/adr/                          # one short file per decision, including rejected alternatives
@@ -89,15 +96,17 @@ your-app/
 **Dependency rule.** Imports only point inward:
 
 ```
-domain/<x>dom  ←  service/<x>svc  ←  repo/* · external/* · httpapi  ←  cmd/api
+domain/<x>dom  ←  service/<x>svc  ←  repo/* · gateway/* · delivery/*  ←  cmd/api
                         └── <x>svctest (fakes): imported from _test.go files only
 ```
 
 Services never import other services. `arch_test.go` fails the build on any other edge.
 
+![Layers: domain at the centre, service around it, and the delivery, repo and gateway adapters in the outer ring. Imports point inward.](docs/img/layers.svg)
+
 ## Design choices
 
-**1. Layers are folders, and domains are subfolders.** `domain/`, `service/`, `repo/`, `external/` and `httpapi/` make the architecture visible from the file tree. Each domain gets its own subfolder in every layer, so all the code for a domain is easy to find.
+**1. Layers are folders, and domains are subfolders.** `domain/`, `service/`, `repo/`, `gateway/` and `delivery/` make the architecture visible from the file tree. Each domain gets its own subfolder in every layer, so all the code for a domain is easy to find.
 
 **2. Every package carries a layer suffix: `patientdom`, `patientsvc`, `patientrepo`.** In Go a folder is a package, and its name prefixes every identifier the package exports. With the suffix, all three layers can be imported side by side without aliases, and every call site says which layer it touches (`patientdom.ErrNotFound`, `patientsvc.New`, `patientrepo.New(tx)`). The folder name always matches the package name.
 
@@ -105,23 +114,26 @@ Services never import other services. `arch_test.go` fails the build on any othe
 
 **4. Services never import other services.** When `emrsvc` needs patient data, it declares a small `Patients` interface in its own `ports.go`, and `patientrepo` satisfies it. Use cases stay flat, and services can't form import cycles.
 
-**5. Storage and third-party systems are separate adapter folders.** `repo/` holds data the app owns: schemas it migrates and transactions it controls. `external/` holds systems it calls, such as Epic, OpenAI or Stripe. The two fail differently, are tested differently and change for different reasons. Repos are per domain. When one use case must write several domains atomically, `pgtx` opens a single transaction and builds every repo on it.
+**5. Adapters split three ways: `repo/`, `gateway/`, `delivery/`.** `repo/` holds data the app owns: schemas it migrates and transactions it controls. `gateway/` holds systems it calls, such as Epic, OpenAI or Stripe; the name is Fowler's Gateway pattern, and each package carries a `gw` suffix (`openaigw`) so it never collides with the vendor's SDK package. `delivery/` holds the ways requests reach the app, one package per transport (`rest`, `grpcapi`, `consumer`). All three stay under `internal/`: in Go that folder is a visibility rule, not a "core only" marker, and moving adapters out would publish them as API. Repos and gateways fail differently, are tested differently and change for different reasons. Repos are per domain. When one use case must write several domains atomically, `pgtx` opens a single transaction and builds every repo on it.
 
 **6. Fakes live beside the ports, in `<x>svctest`, not beside the adapters.** A fake imitates the port, not the vendor: `FakeEHR` stands in for `emrsvc.EHRClient`, not for Epic. The standard library uses the same pattern (`net/http/httptest`, `testing/fstest`). Each `<x>svctest` also ships a contract suite that both the fake and the real adapter must pass, so service tests can never pass against a fake that behaves differently from production.
 
-**7. DTOs have three homes, and the domain has none.**
+**7. DTOs live at the edge that speaks them, and the domain has none.**
 
 | DTO | Lives in | Example |
 |---|---|---|
-| Wire (JSON request/response) | `httpapi/dto.go` | `createListRequest`, `listResponse` |
+| Wire (API request/response) | the delivery package: `delivery/rest/dto.go` (JSON), protobuf types in `delivery/grpcapi`, `delivery/consumer/dto.go` (messages) | `createListRequest`, `listResponse` |
 | Port (data exchanged with an outside system) | the service's `ports.go` | `SummaryRequest`, `ChargeResult` |
+| Vendor wire shapes | unexported, inside the gateway package | `chatRequest` in `openaigw` |
 | Persistence rows | unexported, inside the repo package | `listRow` in `listrepo` |
 
 Domain types carry no struct tags. The API contract, the vendor's format and the database schema each change for their own reasons, and none of those changes should touch business rules.
 
+![One request through delivery/rest, service/listsvc, repo/listrepo and gateway/openaigw, with the DTO each layer owns.](docs/img/request-flow.svg)
+
 **8. `cmd/api/main.go` is the only place that knows concrete types.** It reads config, builds adapters, injects them into services and starts the server. Wiring is plain Go with no DI framework, so the compiler checks every connection.
 
-**9. Tests sit beside the code they test.** `go test` requires it. The test pyramid follows the layers: table-driven unit tests in `domain/`, service tests over fakes in `service/`, contract and integration tests in `repo/` and `external/`, and end-to-end tests through `httptest` in `httpapi/`.
+**9. Tests sit beside the code they test.** `go test` requires it. The test pyramid follows the layers: table-driven unit tests in `domain/`, service tests over fakes in `service/`, contract and integration tests in `repo/` and `gateway/`, and end-to-end tests through `httptest` in `delivery/rest/`.
 
 **10. The rules are enforced, not just documented.** Go refuses to compile import cycles, `internal/` hides everything from other modules, and `arch_test.go` checks every remaining edge. When a check fails, it prints a WHY line and a FIX line.
 
@@ -133,9 +145,9 @@ Domain types carry no struct tags. The API contract, the vendor's format and the
 | `services/` | `internal/service/<x>svc/` |
 | `ports/` (abstract base classes) | `ports.go` inside each service (choice 3) |
 | `adapters/repositories/` | `internal/repo/` |
-| `adapters/<vendor>/` | `internal/external/` (choice 5) |
+| `adapters/<vendor>/` | `internal/gateway/<vendor>gw/` (choice 5) |
 | `adapters/*/fake.py`, mocks | `internal/service/<x>svc/<x>svctest/` (choice 6) |
-| `entrypoints/api/` + `schemas/` | `internal/httpapi/` + `dto.go` (choice 7) |
+| `entrypoints/api/` + `schemas/` | `internal/delivery/rest/` + `dto.go` (choice 7) |
 | `bootstrap.py` / DI container | `cmd/api/main.go` (choice 8) |
 | `tests/unit/`, `tests/integration/` … | `_test.go` beside each file (choice 9) |
 

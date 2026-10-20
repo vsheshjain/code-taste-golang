@@ -1,9 +1,10 @@
-package httpapi
+package rest
 
 import "github.com/vsheshjain/code-taste-golang/example/internal/domain/listdom"
 
-// Wire DTOs: the JSON contract of the HTTP API. They live in the entrypoint
-// because only the entrypoint speaks JSON. Domain types carry no tags, and
+// Wire DTOs: the JSON contract of the REST API. They live in the delivery
+// adapter because only it speaks JSON; a grpc or consumer adapter would keep
+// its own wire shapes the same way. Domain types carry no tags, and
 // the repo has its own row shapes, so each of the three can change alone.
 
 type createListRequest struct {

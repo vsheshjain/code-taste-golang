@@ -60,18 +60,18 @@ func newLogger(env string) *slog.Logger {
 
 ### 3. Inject the logger; don't reach for a global
 
-The example passes `*slog.Logger` into `httpapi.NewHandler`. That's the same dependency-injection rule as everything else: `main` builds it, everything below receives it. Tests pass `slog.New(slog.DiscardHandler)` (Go 1.24) and stay quiet.
+The example passes `*slog.Logger` into `rest.NewHandler`. That's the same dependency-injection rule as everything else: `main` builds it, everything below receives it. Tests pass `slog.New(slog.DiscardHandler)` (Go 1.24) and stay quiet.
 
 The pragmatic alternative is `slog.SetDefault(logger)` in `main` and `slog.InfoContext(...)` elsewhere. It's fine for small services, but it's a hidden global: tests can't capture or silence logs per test, and parallel tests share it. Pick injection for anything with more than one package that logs.
 
-Use `logger.With("component", "httpapi")` to derive a child logger with fixed attributes rather than repeating them on every call.
+Use `logger.With("component", "rest")` to derive a child logger with fixed attributes rather than repeating them on every call.
 
 ### 4. Request IDs ride on context.Context
 
 Go has no implicit request-scoped state. The request ID goes into the `context.Context`, and a small `slog.Handler` wrapper copies it onto every record. Because the handler reads from `ctx`, you must use the `*Context` methods (`InfoContext`, `ErrorContext`) — plain `Info` passes `context.Background()` and the ID is silently lost.
 
 ```go
-package httpapi
+package rest
 
 import (
 	"context"
@@ -215,7 +215,7 @@ slog has four: `Debug`, `Info`, `Warn`, `Error`.
 - `Warn` — unexpected but handled: a retry succeeded, a fallback was used.
 - `Error` — something is broken and someone should look.
 
-A `listdom.ErrNotFound` is **not** an error log — it's an expected 404. In the example's [`httpapi.fail`](../../../../example/internal/httpapi/httpapi.go), domain errors map to 4xx silently; only the `default` branch (truly unexpected) logs at `Error`.
+A `listdom.ErrNotFound` is **not** an error log — it's an expected 404. In the example's [`rest.fail`](../../../../example/internal/delivery/rest/rest.go), domain errors map to 4xx silently; only the `default` branch (truly unexpected) logs at `Error`.
 
 Use `slog.LevelVar` if you want to flip the level at runtime without a restart.
 

@@ -13,12 +13,12 @@ If you understood Repository, you've already used the pattern. Adapter is the ge
 | Term | What it is in Go | Example |
 |---|---|---|
 | **Port** | An interface **declared in the service that consumes it**, in that service's `ports.go`. Small, often one or two methods. | `listsvc.Store`, `listsvc.Summarizer`, `billingsvc.Payments` |
-| **Adapter** | A concrete struct that satisfies the port implicitly. Storage adapters live in `internal/repo/<name>repo`; every other external system in `internal/external/<tech>`, named after the technology. | `listrepo.Lists`, `openai.Summarizer`, `stripe.Gateway` |
+| **Adapter** | A concrete struct that satisfies the port implicitly. Storage adapters live in `internal/repo/<name>repo`; every other external system in `internal/gateway/<vendor>gw`, named after the vendor plus `gw`. | `listrepo.Lists`, `openaigw.Summarizer`, `stripegw.Client` |
 | **Fake** | A hand-written, exported struct in a `<svc>test` package beside the port, `httptest`-style. Imported only from `_test.go` files. | `listsvctest.Store`, `listsvctest.FakeSummarizer` |
 
 Mental model: the **port is the shape of the hole**, the **adapter is the plug**. The service only knows the hole.
 
-Why two adapter folders? `repo/` holds data the app owns: its schema, its migrations, its transactions. `external/` holds systems someone else owns (an EMR vendor, an LLM provider, a payment gateway) that the app calls over the network. They fail differently, are tested differently, and the split tells a reader at a glance which is which.
+Why two adapter folders? `repo/` holds data the app owns: its schema, its migrations, its transactions. `gateway/` (named for Fowler's Gateway pattern: an object that wraps access to an external system) holds systems someone else owns (an EMR vendor, an LLM provider, a payment gateway) that the app calls over the network. They fail differently, are tested differently, and the split tells a reader at a glance which is which.
 
 Go makes this cheaper than most languages because satisfaction is implicit. The adapter doesn't name the interface, doesn't embed a base class, and often doesn't import the consumer at all. Any type with the right methods fits. This is why Go puts interfaces on the consumer side: the consumer knows exactly which methods it needs, and the implementer doesn't have to guess ([Code Review Comments: Interfaces](https://go.dev/wiki/CodeReviewComments#interfaces)).
 
@@ -48,8 +48,8 @@ Same shape for an LLM:
 
 ```
 listsvc.Summarizer
-    ├── *openai.Summarizer           (internal/external/openai)
-    ├── *anthropic.Summarizer        (internal/external/anthropic)
+    ├── *openaigw.Summarizer         (internal/gateway/openaigw)
+    ├── *anthropicgw.Summarizer      (internal/gateway/anthropicgw)
     └── *listsvctest.FakeSummarizer  (beside the port)
 ```
 
@@ -57,7 +57,7 @@ And for payments:
 
 ```
 billingsvc.Payments
-    ├── *stripe.Gateway              (internal/external/stripe)
+    ├── *stripegw.Client             (internal/gateway/stripegw)
     └── *billingsvctest.FakePayments (beside the port)
 ```
 
@@ -101,11 +101,11 @@ func (s *Service) Summarize(ctx context.Context, id listdom.ID) (Summary, error)
 }
 ```
 
-The real adapter, under `external/`, in a package named for the provider:
+The real adapter, under `gateway/`, in a package named for the provider plus `gw`. The suffix keeps it from colliding with the provider's own SDK package (`github.com/openai/openai-go` is `package openai`):
 
 ```go
-// internal/external/openai/summarizer.go
-package openai
+// internal/gateway/openaigw/summarizer.go
+package openaigw
 
 type Summarizer struct {
 	client *http.Client
@@ -149,7 +149,7 @@ func (s *Summarizer) Summarize(ctx context.Context, req listsvc.SummaryRequest) 
 }
 ```
 
-The fake, hand-written, in the service's test-helper package. It lives beside the port it implements, not beside `openai`, because it fakes *our* interface, not OpenAI's API. That's the standard library's pattern: `net/http/httptest`, `testing/fstest`, `io/iotest`.
+The fake, hand-written, in the service's test-helper package. It lives beside the port it implements, not beside `openaigw`, because it fakes *our* interface, not OpenAI's API. That's the standard library's pattern: `net/http/httptest`, `testing/fstest`, `io/iotest`.
 
 ```go
 // internal/service/listsvc/listsvctest/summarizer.go
@@ -171,13 +171,13 @@ Exported, so the service tests *and* the HTTP end-to-end tests can share it. A f
 And the wiring, once, in [cmd/api/main.go](../../../../example/cmd/api/main.go):
 
 ```go
-svc := listsvc.New(uow, openai.NewSummarizer(http.DefaultClient, cfg.OpenAIKey, "gpt-4o-mini"), newID)
+svc := listsvc.New(uow, openaigw.NewSummarizer(http.DefaultClient, cfg.OpenAIKey, "gpt-4o-mini"), newID)
 ```
 
 Things to notice:
 
 1. **The port defines its own DTOs.** `listsvc.SummaryRequest`, in `ports.go`, not the provider's request type. The provider's `chatRequest`/`chatResponse` are unexported in `openai`, so they physically can't leak.
-2. **The adapter imports `listsvc`** to name the DTOs in its method signature. That's allowed: adapters point inward. `listsvc` never imports `openai`.
+2. **The adapter imports `listsvc`** to name the DTOs in its method signature. That's allowed: adapters point inward. `listsvc` never imports `openaigw`.
 3. **Errors are translated at the seam.** A 429 becomes `listsvc.ErrRateLimited`, which the service or handler can match with `errors.Is`. Everything else is wrapped with `%w` and a prefix that names the adapter.
 4. **`ctx` flows into the outgoing request** with `NewRequestWithContext`, so a cancelled HTTP request upstream cancels the LLM call.
 5. **The fake is a plain struct** in `listsvctest`, not a mock framework. It records calls in a slice; the test asserts on the slice. No `EXPECT()`, no generated code. The example's [arch_test.go](../../../../example/arch_test.go) fails the build if non-test code imports a `<svc>test` package, so fakes can't leak into production wiring.
@@ -197,10 +197,10 @@ The example's [listrepo](../../../../example/internal/repo/listrepo/listrepo.go)
 | External system | Port (in the service's `ports.go`) | Real adapter | Fake (in `<svc>test`) |
 |---|---|---|---|
 | Storage | `listsvc.Store`, `listsvc.UnitOfWork` | `repo/listrepo` (+ `repo/pgtx` for shared transactions) | `listsvctest.Store` |
-| LLM | `listsvc.Summarizer` | `external/openai.Summarizer` | `listsvctest.FakeSummarizer` |
-| Payments | `billingsvc.Payments` | `external/stripe.Gateway` | `billingsvctest.FakePayments` |
-| EMR vendor | `emrsvc.EHRClient` | `external/epic.Client` | `emrsvctest.FakeEHR` |
-| Email | `notifysvc.Mailer` | `external/ses.Mailer` | `notifysvctest.FakeMailer` |
+| LLM | `listsvc.Summarizer` | `gateway/openaigw.Summarizer` | `listsvctest.FakeSummarizer` |
+| Payments | `billingsvc.Payments` | `gateway/stripegw.Client` | `billingsvctest.FakePayments` |
+| EMR vendor | `emrsvc.EHRClient` | `gateway/epicgw.Client` | `emrsvctest.FakeEHR` |
+| Email | `notifysvc.Mailer` | `gateway/sesgw.Mailer` | `notifysvctest.FakeMailer` |
 
 ## What's in / what's out
 
@@ -278,13 +278,13 @@ A whole package for one implementation. A `func() time.Time` field does the same
 ### Trap 4: the interface next to the implementation
 
 ```go
-package stripe
+package stripegw
 
 type PaymentGateway interface { Charge(...) }    // declared by the producer
 func New(...) PaymentGateway { return &gateway{} } // returns the interface
 ```
 
-This is the Java habit. It forces `billingsvc` to import `external/stripe` for the interface (an outward dependency), and it hides the concrete type. Return `*stripe.Gateway`; let `billingsvc` declare the slice of behaviour it needs in its `ports.go`.
+This is the Java habit. It forces `billingsvc` to import `gateway/stripegw` for the interface (an outward dependency), and it hides the concrete type. Return `*stripegw.Client`; let `billingsvc` declare the slice of behaviour it needs in its `ports.go`.
 
 ### Trap 5: mock frameworks for everything
 
@@ -300,9 +300,9 @@ If you already use a library that abstracts several LLM providers, adding your o
 go list -f '{{.ImportPath}}: {{join .Imports " "}}' ./internal/... | grep -E 'stripe|openai|aws|pgx|database/sql'
 ```
 
-SDK imports should appear only in the `external/` package named after that SDK (or in `repo/` for database drivers). A hit in `internal/service/` or `internal/domain/` is a leak.
+SDK imports should appear only in the `gateway/` package named after that SDK (or in `repo/` for database drivers). A hit in `internal/service/` or `internal/domain/` is a leak.
 
-Then grep for interfaces declared in adapter packages (`grep -rn 'interface {' internal/repo internal/external`). Small helper interfaces the adapter itself consumes (like `listrepo.Querier`, covering `*sql.DB` and `*sql.Tx`) are fine. Interfaces meant for services belong in the service's `ports.go`.
+Then grep for interfaces declared in adapter packages (`grep -rn 'interface {' internal/repo internal/gateway`). Small helper interfaces the adapter itself consumes (like `listrepo.Querier`, covering `*sql.DB` and `*sql.Tx`) are fine. Interfaces meant for services belong in the service's `ports.go`.
 
 ## The hidden benefit
 
@@ -313,18 +313,18 @@ And because the interface lives with the consumer, it stays exactly as big as th
 ## Self-check
 
 1. In Go, which package declares a port, which file is it in, and why not the adapter's package?
-2. Why can the `openai` adapter import `listsvc`, but `listsvc` can't import `openai`?
+2. Why can the `openaigw` adapter import `listsvc`, but `listsvc` can't import `openaigw`?
 3. Your service calls the Stripe SDK directly. Name three things wrong with that.
 4. What does `var _ listsvc.UnitOfWork = (*File)(nil)` buy you?
 5. When is a `func() time.Time` better than a `Clock` interface?
 6. Why prefer a hand-written fake over a generated mock?
-7. Why does `FakeSummarizer` live in `listsvctest` rather than in `external/openai`?
+7. Why does `FakeSummarizer` live in `listsvctest` rather than in `gateway/openaigw`?
 
 ## Things to steal
 
 - **The consumer declares the interface; the adapter just has the methods.**
-- **Accept interfaces, return structs.** Constructors return `*openai.Summarizer`, never `listsvc.Summarizer`.
-- **Two adapter homes:** `repo/<name>repo` for data you own, `external/<tech>` for systems you call. External packages are named for the technology: `openai`, `stripe`, `epic`.
+- **Accept interfaces, return structs.** Constructors return `*openaigw.Summarizer`, never `listsvc.Summarizer`.
+- **Two adapter homes:** `repo/<name>repo` for data you own, `gateway/<vendor>gw` for systems you call. Gateway packages are the vendor name plus `gw` (`openaigw`, `stripegw`, `epicgw`), so they never collide with the vendor's own SDK package.
 - **Your DTOs at the seam; provider types unexported in the adapter.**
 - **Translate errors at the seam,** wrap the rest with `%w`.
 - **Hand-written fakes beside the port,** in `<svc>test`, imported only from tests.

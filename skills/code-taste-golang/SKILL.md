@@ -33,14 +33,14 @@ The full doc set is at `./docs/architecture/`:
 ## Step 2 — Match task to review mode
 
 **"Review this code":**
-- Identify the package's layer (`domain/<x>dom` / `service/<x>svc` / `repo` / `external` / `httpapi` / `cmd`)
+- Identify the package's layer (`domain/<x>dom` / `service/<x>svc` / `repo` / `gateway` / `delivery` / `cmd`)
 - Check that layer's "Traps" section from its doc
 - Verify the dependency rule (`go list -deps ./internal/<pkg>` — does anything inner import something outer?)
 - Check the Go-specific smells below
 
 **"Structure this new feature":**
 - Sketch the package layout from `project-structure.md`
-- Put each interface in the consuming service's `ports.go`; storage adapters go in `repo/<x>repo`, third-party ones in `external/<tech>`, fakes in `<x>svctest`
+- Put each interface in the consuming service's `ports.go`; storage adapters go in `repo/<x>repo`, third-party ones in `gateway/<vendor>gw`, fakes in `<x>svctest`
 - Identify the right test boundary (domain unit / service with in-memory adapter / integration / e2e with `httptest`)
 - Don't over-layer if the feature is small — match rigor to scope
 
@@ -98,8 +98,8 @@ internal/domain/<x>dom     ←  stdlib + upstream domains (entities, rules, sent
 internal/service/<x>svc    ←  domain (use cases; ports.go declares every outside need + port DTOs)
   └── <x>svctest           ←  its service + domain (fakes + contract suites; _test.go only)
 internal/repo/<x>repo      ←  domain, service (storage adapters; row shapes unexported here)
-internal/external/<tech>   ←  domain, service (third-party adapters)
-internal/httpapi           ←  domain, service (entrypoint; wire DTOs in dto.go)
+internal/gateway/<vendor>gw ←  domain, service (third-party adapters; vendor shapes unexported here)
+internal/delivery/<kind>   ←  domain, service (entrypoints: rest, grpcapi, consumer; wire DTOs here)
 cmd/<binary>               ←  everything except fakes (the wiring)
 ```
 

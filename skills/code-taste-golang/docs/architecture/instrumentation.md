@@ -31,7 +31,7 @@ if err != nil {
 }
 srv := &http.Server{
 	Addr:    addr,
-	Handler: otelhttp.NewHandler(httpapi.NewHandler(svc, log), "api"),
+	Handler: otelhttp.NewHandler(rest.NewHandler(svc, log), "api"),
 }
 ```
 
@@ -208,7 +208,7 @@ func TestCreateListLatencyBudget(t *testing.T) {
 		t.Skip("latency budget test")
 	}
 	svc := listsvc.New(&listsvctest.Store{}, func() listdom.ID { return listdom.ID(rand.Text()) })
-	srv := httptest.NewServer(httpapi.NewHandler(svc, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(rest.NewHandler(svc, slog.New(slog.DiscardHandler)))
 	defer srv.Close()
 
 	durations := make([]time.Duration, 200)

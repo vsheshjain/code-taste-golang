@@ -56,7 +56,7 @@ Notice what's *not* there:
 - No `if len(l.Items) >= 100`. That's a domain rule, it lives in `(*listdom.List).AddItem`.
 - No `http.ResponseWriter`, no status codes. That's the handler's job.
 - No `tx.Commit()`. The [Unit of Work](./unit-of-work.md) commits when the closure returns `nil`.
-- No `listrepo.`, `listsvctest.` or any `external/` package anywhere. The service only knows the interfaces in its own `ports.go`.
+- No `listrepo.`, `listsvctest.` or any `gateway/` package anywhere. The service only knows the interfaces in its own `ports.go`.
 
 Also notice `newID func() listdom.ID`. A single-method dependency doesn't need an interface; a function value is the idiomatic Go seam, and it makes tests deterministic. The same goes for clocks: inject `now func() time.Time` rather than calling `time.Now()` inside the use case.
 
@@ -215,7 +215,7 @@ Now the service imports the adapter, reads config, and can't be tested without a
 go list -f '{{join .Imports "\n"}}' ./internal/service/...
 ```
 
-The output should be the standard library plus your domain packages. `net/http`, `database/sql`, any SDK, any `repo/` or `external/` package, or another service means a layer has leaked into the service.
+The output should be the standard library plus your domain packages. `net/http`, `database/sql`, any SDK, any `repo/` or `gateway/` package, or another service means a layer has leaked into the service.
 
 Then read each exported method and check its shape: open UoW → load → call domain → save. Anything else needs a reason.
 

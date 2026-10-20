@@ -32,9 +32,9 @@ var allowed = map[string][]string{
 	"service":  {"domain"},
 	"svctest":  {"domain", "service"},
 	"repo":     {"domain", "service"},
-	"external": {"domain", "service"},
-	"httpapi":  {"domain", "service"},
-	"cmd":      {"domain", "service", "repo", "external", "httpapi"},
+	"gateway":  {"domain", "service"},
+	"delivery": {"domain", "service"},
+	"cmd":      {"domain", "service", "repo", "gateway", "delivery"},
 }
 
 // TestDependencyRule fails if any non-test package imports a layer it
@@ -64,7 +64,7 @@ func TestDependencyRule(t *testing.T) {
 			}
 			if !contains(allowed[from], to) {
 				t.Errorf("%s (%s) imports %s (%s)\n"+
-					"  WHY: dependencies point inward: domain ← service ← repo/external/httpapi ← cmd; svctest fakes are for _test.go files only\n"+
+					"  WHY: dependencies point inward: domain ← service ← repo/gateway/delivery ← cmd; svctest fakes are for _test.go files only\n"+
 					"  FIX: move the shared type inward (service ports.go or domain), or do the wiring in cmd/",
 					pkg, from, imp, to)
 			}

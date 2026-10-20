@@ -31,7 +31,7 @@ The architecture exists *because* it makes tests cheap. Pure domain package → 
 | **Unit** | `internal/domain/listdom` (domain) | microseconds | hundreds | `TestAddItemFull` |
 | **Service** | `internal/service/listsvc` with `listsvctest.Store` | milliseconds | tens to low hundreds | `TestCreateListAssignsSlug` |
 | **Integration** | `internal/repo/listrepo` (or a Postgres `internal/repo/<x>repo`) running the contract suite against the real store | ms to hundreds of ms | tens | `TestFile` |
-| **E2E** | `internal/httpapi` via `httptest.NewServer` | tens of ms to seconds | a few per critical flow | `TestListLifecycle` |
+| **E2E** | `internal/delivery/rest` via `httptest.NewServer` | tens of ms to seconds | a few per critical flow | `TestListLifecycle` |
 
 The inverse pyramid (lots of e2e, few unit) is a smell. It means your business rules can't be exercised without HTTP or a database — which means they aren't actually in the domain package.
 
@@ -153,15 +153,15 @@ func TestPostgres(t *testing.T) {
 
 Build tags are clearer when the test needs extra dependencies to even compile; `testing.Short()` is fine when it only needs a running service. Pick one per repo and stick to it.
 
-Integration tests live in the adapter's own package (`internal/repo/<x>repo`, `internal/external/<tech>`). The example's [`listrepo_test.go`](../../../../example/internal/repo/listrepo/listrepo_test.go) needs no build tag because its "real thing" is a file in `t.TempDir()`. Write **few** of these beyond the contract suite — roughly one per adapter method with non-trivial mapping (row ↔ entity, SQL error ↔ domain error). Their job is to catch SQL and mapping mistakes, not to retest domain rules.
+Integration tests live in the adapter's own package (`internal/repo/<x>repo`, `internal/gateway/<vendor>gw`). The example's [`listrepo_test.go`](../../../../example/internal/repo/listrepo/listrepo_test.go) needs no build tag because its "real thing" is a file in `t.TempDir()`. Write **few** of these beyond the contract suite — roughly one per adapter method with non-trivial mapping (row ↔ entity, SQL error ↔ domain error). Their job is to catch SQL and mapping mistakes, not to retest domain rules.
 
 ### E2E tests — the full stack
 
-Go's `net/http/httptest` runs your real handler on a real loopback listener with no external process ([`httpapi_test.go`](../../../../example/internal/httpapi/httpapi_test.go)):
+Go's `net/http/httptest` runs your real handler on a real loopback listener with no external process ([`rest_test.go`](../../../../example/internal/delivery/rest/rest_test.go)):
 
 ```go
 svc := listsvc.New(&listsvctest.Store{}, func() listdom.ID { return "l1" })
-srv := httptest.NewServer(httpapi.NewHandler(svc, slog.New(slog.DiscardHandler)))
+srv := httptest.NewServer(rest.NewHandler(svc, slog.New(slog.DiscardHandler)))
 defer srv.Close()
 ```
 
@@ -315,7 +315,7 @@ No `time.Sleep` in tests, ever.
 
 ### The architecture test
 
-The dependency rule is enforced by a test, not by a wiki page. [`arch_test.go`](../../../../example/arch_test.go) runs `go list` over every package, classifies each import by layer, and fails with a WHY/FIX message if, say, `internal/repo/listrepo` imports `internal/httpapi`:
+The dependency rule is enforced by a test, not by a wiki page. [`arch_test.go`](../../../../example/arch_test.go) runs `go list` over every package, classifies each import by layer, and fails with a WHY/FIX message if, say, `internal/repo/listrepo` imports `internal/delivery/rest`:
 
 ```go
 var allowed = map[string][]string{
@@ -323,9 +323,9 @@ var allowed = map[string][]string{
 	"service":  {"domain"},
 	"svctest":  {"domain", "service"},
 	"repo":     {"domain", "service"},
-	"external": {"domain", "service"},
-	"httpapi":  {"domain", "service"},
-	"cmd":      {"domain", "service", "repo", "external", "httpapi"},
+	"gateway":  {"domain", "service"},
+	"delivery": {"domain", "service"},
+	"cmd":      {"domain", "service", "repo", "gateway", "delivery"},
 }
 ```
 
@@ -350,7 +350,7 @@ A good test name: `TestAddItemRejectsDuplicateURL`. A bad one: `TestAddItem2`, `
 | `internal/service/listsvc` | Service | Inject `&listsvctest.Store{}` and a fixed ID func |
 | `internal/service/listsvc/listsvctest` | Contract | The fake runs the same suite as the real adapter |
 | `internal/repo/listrepo` (adapter) | Integration | Contract suite against the real store, only in this package |
-| `internal/httpapi` | E2E | `httptest` + full stack, a handful of cases |
+| `internal/delivery/rest` | E2E | `httptest` + full stack, a handful of cases |
 | `cmd/api` | none | `main` only wires; keep logic out so there's nothing to test |
 
 If your handlers contain business rules, every test becomes an HTTP test. The pyramid inverts, the suite slows, people stop running it.

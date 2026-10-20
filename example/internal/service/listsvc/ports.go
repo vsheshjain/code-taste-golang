@@ -8,7 +8,7 @@ import (
 
 // This file is the service's ports: everything it needs from the outside
 // world, declared here by the consumer. Implementations live in repo/ and
-// external/; fakes live in listsvctest.
+// gateway/; fakes live in listsvctest.
 
 // Store is the repository port for the List aggregate.
 // Get returns listdom.ErrNotFound when the list doesn't exist.

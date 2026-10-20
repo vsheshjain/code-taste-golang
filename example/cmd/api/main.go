@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vsheshjain/code-taste-golang/example/internal/delivery/rest"
 	"github.com/vsheshjain/code-taste-golang/example/internal/domain/listdom"
-	"github.com/vsheshjain/code-taste-golang/example/internal/httpapi"
 	"github.com/vsheshjain/code-taste-golang/example/internal/repo/listrepo"
 	"github.com/vsheshjain/code-taste-golang/example/internal/service/listsvc"
 )
@@ -38,7 +38,7 @@ func run(log *slog.Logger) error {
 	svc := listsvc.New(listrepo.New(dataFile), func() listdom.ID { return listdom.ID(rand.Text()) })
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.NewHandler(svc, log),
+		Handler:           rest.NewHandler(svc, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

@@ -133,7 +133,7 @@ Don't write `func (l *List) GetName() string` and `SetName`. [Effective Go](http
 
 ### Another: the shared `models` package
 
-A single `internal/models` package that holds every struct, imported by every layer, is the Go version of "the ORM model is the domain." It ends up with `db` tags, `json` tags and validation tags on the same struct, and every change ripples everywhere. Keep three shapes (see [project-structure.md](./project-structure.md)): the domain type in `domain/<name>dom` with no tags, the storage row unexported inside `repo/<name>repo`, and the wire DTO in `httpapi/dto.go`. Each can then change without touching the other two.
+A single `internal/models` package that holds every struct, imported by every layer, is the Go version of "the ORM model is the domain." It ends up with `db` tags, `json` tags and validation tags on the same struct, and every change ripples everywhere. Keep three shapes (see [project-structure.md](./project-structure.md)): the domain type in `domain/<name>dom` with no tags, the storage row unexported inside `repo/<name>repo`, and the wire DTO in `delivery/rest/dto.go`. Each can then change without touching the other two.
 
 ## How to spot it in your code
 

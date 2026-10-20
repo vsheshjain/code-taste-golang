@@ -1,4 +1,4 @@
-package httpapi_test
+package rest_test
 
 import (
 	"io"
@@ -8,15 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vsheshjain/code-taste-golang/example/internal/delivery/rest"
 	"github.com/vsheshjain/code-taste-golang/example/internal/domain/listdom"
-	"github.com/vsheshjain/code-taste-golang/example/internal/httpapi"
 	"github.com/vsheshjain/code-taste-golang/example/internal/service/listsvc"
 	"github.com/vsheshjain/code-taste-golang/example/internal/service/listsvc/listsvctest"
 )
 
 func TestListLifecycle(t *testing.T) {
 	svc := listsvc.New(&listsvctest.Store{}, func() listdom.ID { return "l1" })
-	srv := httptest.NewServer(httpapi.NewHandler(svc, slog.New(slog.DiscardHandler)))
+	srv := httptest.NewServer(rest.NewHandler(svc, slog.New(slog.DiscardHandler)))
 	defer srv.Close()
 
 	steps := []struct {

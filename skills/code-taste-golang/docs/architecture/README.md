@@ -14,7 +14,7 @@ A runnable, stdlib-only module that applies everything here lives at [`example/`
 
 ```mermaid
 flowchart TD
-    H["httpapi (entrypoint)<br/>decode → call → encode"] --> S["listsvc.Service (use case)"]
+    H["delivery/rest (entrypoint)<br/>decode → call → encode"] --> S["listsvc.Service (use case)"]
     S -->|"uow.Do(ctx, fn)"| U["listsvc.UnitOfWork (port, in ports.go)"]
     S -->|"l.AddItem(it)"| D["listdom.List (domain)"]
     U -.implemented by.-> M["listrepo.File / pgtx (repo adapter)<br/>listsvctest.Store (fake)"]
@@ -32,22 +32,22 @@ classDiagram
         <<interface, in listsvc/ports.go>>
         Summarize(ctx, Request) (Summary, error)
     }
-    class openai_Client {
-        <<package external/openai>>
+    class openaigw_Client {
+        <<package gateway/openaigw>>
         Summarize(ctx, Request) (Summary, error)
     }
     class fakeSummarizer {
         <<package listsvc/listsvctest>>
         Summarize(ctx, Request) (Summary, error)
     }
-    openai_Client ..|> Summarizer : satisfies implicitly
+    openaigw_Client ..|> Summarizer : satisfies implicitly
     fakeSummarizer ..|> Summarizer : satisfies implicitly
 ```
 
 The **port is the shape of the hole; the adapter is the plug.** Two Go-specific twists:
 
-1. **The port lives with its consumer**, not with its implementation. `listsvc` says "I need something that can `Summarize`" in its `ports.go`; `openai` never mentions `listsvc.Summarizer` at all. Go interfaces are satisfied implicitly, so the adapter doesn't need to import the port. ([Code Review Comments: Interfaces](https://go.dev/wiki/CodeReviewComments#interfaces))
-2. **Constructors return concrete types.** `openai.New(...)` returns `*openai.Client`, not `listsvc.Summarizer`. The conversion to the interface happens at the call site in `main`. *"Accept interfaces, return structs."*
+1. **The port lives with its consumer**, not with its implementation. `listsvc` says "I need something that can `Summarize`" in its `ports.go`; `openaigw` never mentions `listsvc.Summarizer` at all. Go interfaces are satisfied implicitly, so the adapter doesn't need to import the port. ([Code Review Comments: Interfaces](https://go.dev/wiki/CodeReviewComments#interfaces))
+2. **Constructors return concrete types.** `openaigw.New(...)` returns `*openaigw.Client`, not `listsvc.Summarizer`. The conversion to the interface happens at the call site in `main`. *"Accept interfaces, return structs."*
 
 ### The dependency rule (the only thing you must get right)
 
@@ -56,8 +56,8 @@ internal/domain/<x>dom       ←  stdlib + upstream domains         (entities, r
 internal/service/<x>svc      ←  domain                            (use cases + ports.go)
   └── <x>svctest             ←  its service + domain              (fakes; _test.go only)
 internal/repo/<x>repo        ←  domain, service, SQL driver       (storage adapters)
-internal/external/<tech>     ←  domain, service, vendor SDK       (third-party adapters)
-internal/httpapi             ←  domain, service                   (entrypoint, wire DTOs)
+internal/gateway/<vendor>gw  ←  domain, service, vendor SDK       (third-party adapters)
+internal/delivery/<kind>     ←  domain, service                   (entrypoints: rest, grpc, consumer; wire DTOs)
 cmd/api                      ←  everything except fakes           (the wiring — "bootstrap")
 ```
 
@@ -115,7 +115,7 @@ Part II (events, message bus, CQRS) is intentionally skipped. Most services don'
 | **Repository** | Collection-shaped access to storage | A small interface: `Get(ctx, id)`, `Save(ctx, v)` |
 | **Application service** | A use case: load → delegate → save | A method on `listsvc.Service` taking `ctx` first |
 | **Port** | An interface the core depends on | An interface declared in the *consuming* package |
-| **Adapter** | A concrete implementation of a port | A package named after the tech (`postgres`, `stripe`) returning a concrete struct |
+| **Adapter** | A concrete implementation of a port | A package named after the system plus a layer suffix (`listrepo`, `stripegw`) returning a concrete struct |
 | **Unit of Work** | Owns one transaction | `Do(ctx, func(Repos) error) error` — nil commits, error rolls back |
 | **Composition root** | Where concrete types are chosen and wired | `func main()` / `run()` in `cmd/<binary>` |
 | **Hexagonal / Ports-and-Adapters / Clean / Onion** | Domain in the middle, infrastructure outside, dependencies inward | All the same idea |

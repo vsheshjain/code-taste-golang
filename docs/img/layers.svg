@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 680" width="960" height="680" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<defs>
+  <marker id="in" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker>
+  <marker id="out" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker>
+  <style>
+    .lbl { font-size: 17px; font-weight: 700; fill: #0f172a; text-anchor: middle; }
+    .sub { font-size: 12px; fill: #475569; text-anchor: middle; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .subl { font-size: 12px; fill: #475569; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .ext { font-size: 13px; fill: #1e293b; text-anchor: middle; font-weight: 600; }
+    .dep { stroke: #334155; stroke-width: 1.6; }
+    .io  { stroke: #64748b; stroke-width: 1.4; fill: none; }
+    .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.2; }
+  </style>
+</defs>
+<rect width="960" height="680" fill="#ffffff"/>
+<text x="480" y="36" class="lbl" font-size="20">Dependencies point inward</text>
+<text x="480" y="58" style="font-size:13px;fill:#475569;text-anchor:middle">each arrow is an import; nothing in an inner ring knows the outer rings exist</text>
+<circle cx="480" cy="330" r="262" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5 5"/>
+
+<path d="M360.0,537.8 A240,240 0 0 1 360.0,122.2 L410.0,208.8 A140,140 0 0 0 410.0,451.2 Z" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<path d="M360.0,122.2 A240,240 0 0 1 720.0,330.0 L620.0,330.0 A140,140 0 0 0 410.0,208.8 Z" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.4"/>
+<path d="M720.0,330.0 A240,240 0 0 1 360.0,537.8 L410.0,451.2 A140,140 0 0 0 620.0,330.0 Z" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.4"/>
+<text x="290.0" y="306.0" class="lbl">delivery/</text>
+<text x="290.0" y="324.0" class="sub">rest</text>
+<text x="290.0" y="339.0" class="sub">grpcapi</text>
+<text x="290.0" y="354.0" class="sub">consumer</text>
+<text x="575.0" y="149.5" class="lbl">gateway/</text>
+<text x="575.0" y="167.5" class="sub">epicgw</text>
+<text x="575.0" y="182.5" class="sub">openaigw</text>
+<text x="575.0" y="478.5" class="lbl">repo/</text>
+<text x="575.0" y="496.5" class="sub">patientrepo</text>
+<text x="575.0" y="511.5" class="sub">pgtx</text>
+<circle cx="480" cy="330" r="140" fill="#dcfce7" stroke="#16a34a" stroke-width="1.4"/>
+<text x="480" y="216" class="lbl">service/</text><text x="480" y="233" class="sub">use cases</text><text x="480" y="247" class="sub">ports.go</text>
+<text x="480" y="440" class="sub">&lt;x&gt;svctest fakes</text>
+<circle cx="480" cy="330" r="74" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+<text x="480" y="326" class="lbl">domain/</text><text x="480" y="344" class="sub">entities, rules,</text><text x="480" y="358" class="sub">sentinel errors</text>
+<line x1="348.9" y1="238.2" x2="375.1" y2="256.6" class="dep" marker-end="url(#in)"/>
+<line x1="625.0" y1="262.4" x2="596.0" y2="275.9" class="dep" marker-end="url(#in)"/>
+<line x1="466.1" y1="489.4" x2="468.8" y2="457.5" class="dep" marker-end="url(#in)"/>
+<line x1="395.1" y1="379.0" x2="413.3" y2="368.5" class="dep" marker-end="url(#in)"/>
+<line x1="564.9" y1="379.0" x2="546.7" y2="368.5" class="dep" marker-end="url(#in)"/>
+<rect x="330" y="58" width="300" height="20" fill="#ffffff"/>
+<text x="480" y="72" class="sub">cmd/api: composition root, wires every ring</text>
+<rect x="40" y="253" width="128" height="34" rx="8" class="box"/><text x="104" y="275" class="ext">REST client</text>
+<line x1="170" y1="270" x2="241.6" y2="270" class="io" marker-end="url(#out)"/>
+<rect x="40" y="313" width="128" height="34" rx="8" class="box"/><text x="104" y="335" class="ext">gRPC client</text>
+<line x1="170" y1="330" x2="234.0" y2="330" class="io" marker-end="url(#out)"/>
+<rect x="40" y="373" width="128" height="34" rx="8" class="box"/><text x="104" y="395" class="ext">Queue / events</text>
+<line x1="170" y1="390" x2="241.6" y2="390" class="io" marker-end="url(#out)"/>
+<text x="104" y="242" class="sub">requests come in</text>
+<path d="M546.1,98.2 C602.1,98.2 760.0,150 792,150" class="io" marker-end="url(#out)"/>
+<rect x="794" y="133" width="136" height="34" rx="8" class="box"/><text x="862" y="155" class="ext">Epic · OpenAI</text>
+<path d="M662.4,169.4 C718.4,169.4 760.0,206 792,206" class="io" marker-end="url(#out)"/>
+<rect x="794" y="189" width="136" height="34" rx="8" class="box"/><text x="862" y="211" class="ext">Stripe · SES</text>
+<path d="M653.7,499.7 C709.7,499.7 760.0,500 792,500" class="io" marker-end="url(#out)"/>
+<rect x="794" y="483" width="136" height="34" rx="8" class="box"/><text x="862" y="505" class="ext">Postgres</text>
+<text x="862" y="122" class="sub">systems we call</text>
+<text x="862" y="472" class="sub">data we own</text>
+<g transform="translate(40,610)">
+<line x1="0" y1="10" x2="34" y2="10" class="dep" marker-end="url(#in)"/><text x="44" y="14" class="subl">imports (compile-time dependency)</text>
+<line x1="0" y1="36" x2="34" y2="36" class="io" marker-end="url(#out)"/><text x="44" y="40" class="subl">runtime traffic (HTTP, gRPC, SQL, messages)</text>
+</g>
+<text x="920" y="650" class="subl" text-anchor="end" style="text-anchor:end">everything shown lives under internal/ except cmd/</text>
+</svg>
